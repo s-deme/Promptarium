@@ -1,0 +1,16 @@
+# .NET build output
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio and user-local settings
+.vs/
+*.user
+*.suo
+
+# Local SQLite databases and their journal files
+*.db
+*.db-shm
+*.db-wal
+
+# Test results
+TestResults/

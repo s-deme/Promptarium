@@ -1,0 +1,44 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "demo-model.safetensors" }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "text": "1girl, standing, beach, masterpiece, wide shot" }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "text": "low quality, blurry" }
+  },
+  "4": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 123456,
+      "steps": 28,
+      "cfg": 7.5,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "positive": ["2", 0],
+      "negative": ["3", 0]
+    }
+  },
+  "5": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "lora_name": "anime-lora.safetensors",
+      "strength_model": 0.8,
+      "strength_clip": 0.6
+    }
+  },
+  "6": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "demo-vae.safetensors" }
+  },
+  "7": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": 512, "height": 768, "batch_size": 1 }
+  },
+  "8": { "class_type": "VAEDecode", "inputs": {} },
+  "9": { "class_type": "SaveImage", "inputs": {} }
+}
