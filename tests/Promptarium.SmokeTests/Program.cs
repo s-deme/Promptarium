@@ -142,7 +142,8 @@ static async Task RunAsync(string testRoot)
     Assert(detail.ManualPositivePrompt == "manual positive prompt" && detail.ManualSeed == "9001" && detail.ManualWidth == "1024" && detail.IsFavorite && detail.Rating == 5, "User edits were not stored separately from extracted data.");
     Assert(database.GetModels().Contains("manual-model.safetensors"), "Manual model entries are not available to the model filter.");
 
-    await scanner.ScanAllAsync();
+    var differentialScan = await scanner.ScanAllAsync();
+    Assert(differentialScan.Registered == 0 && differentialScan.Skipped == 5 && differentialScan.Failed == 0, "Unchanged files should be skipped without reparsing or rehashing.");
     detail = database.GetDetail(standard.Id) ?? throw new InvalidOperationException("Rescanned image detail is missing.");
     var rescannedStanding = detail.Tags.Single(tag => tag.RawText == "standing");
     Assert(detail.ManualPositivePrompt == "manual positive prompt" && rescannedStanding.Category == "構図／カメラ" && rescannedStanding.Source == "manual" && detail.Tags.Count(tag => tag.RawText == "standing") == 1, "Rescan overwrote or duplicated a manual tag edit.");

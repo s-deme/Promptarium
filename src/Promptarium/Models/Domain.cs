@@ -26,7 +26,15 @@ public sealed class ParsedGeneration
     public string? Cfg { get; set; }
     public string? Sampler { get; set; }
     public string? Scheduler { get; set; }
+    public string? WorkflowWidth { get; set; }
+    public string? WorkflowHeight { get; set; }
+    public Dictionary<string, string> ValueSources { get; } = new(StringComparer.Ordinal);
     public List<LoraUsage> Loras { get; } = [];
+
+    public void SetSource(string field, string source)
+    {
+        if (!string.IsNullOrWhiteSpace(source)) ValueSources[field] = source;
+    }
 }
 
 public sealed class PngMetadata
@@ -43,6 +51,24 @@ public sealed class ScanRoot
     public string Path { get; init; } = string.Empty;
     public bool IncludeSubfolders { get; init; }
     public bool IsEnabled { get; init; }
+    public DateTime? LastScannedUtc { get; init; }
+    public string DisplayName => $"{(IsEnabled ? "●" : "○")} {Path}";
+}
+
+public sealed record FileScanState(long AssetId, string ContentHash, long FileSize, DateTime LastWriteUtc);
+
+public sealed class LibrarySearch
+{
+    public string Text { get; init; } = string.Empty;
+    public string Model { get; init; } = string.Empty;
+    public string Lora { get; init; } = string.Empty;
+    public string Tag { get; init; } = string.Empty;
+    public string Category { get; init; } = string.Empty;
+    public bool FavoritesOnly { get; init; }
+    public ParseStatus? ParseStatus { get; init; }
+    public int MinimumRating { get; init; }
+    public int MinimumWidth { get; init; }
+    public int MinimumHeight { get; init; }
 }
 
 public class ImageSummary
@@ -78,6 +104,9 @@ public sealed class ImageDetail : ImageSummary
     public string? Scheduler { get; init; }
     public string? ParseMessage { get; init; }
     public string? ParseSource { get; init; }
+    public string? ValueSourcesJson { get; init; }
+    public string? WorkflowWidth { get; init; }
+    public string? WorkflowHeight { get; init; }
     public string? ManualPositivePrompt { get; init; }
     public string? ManualNegativePrompt { get; init; }
     public string? ManualModelName { get; init; }
@@ -134,8 +163,9 @@ public sealed class ScanProgress
     public int Discovered { get; init; }
     public int Processed { get; init; }
     public int Registered { get; init; }
+    public int Skipped { get; init; }
     public int Failed { get; init; }
     public string? CurrentPath { get; init; }
 }
 
-public sealed record ScanResult(int Discovered, int Registered, int Failed, TimeSpan Elapsed);
+public sealed record ScanResult(int Discovered, int Registered, int Skipped, int Failed, TimeSpan Elapsed);

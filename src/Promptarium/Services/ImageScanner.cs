@@ -19,13 +19,25 @@ public sealed class ImageScanner
         _classifier = classifier;
     }
 
-    public async Task<ScanResult> ScanAllAsync(IProgress<ScanProgress>? progress = null, CancellationToken cancellationToken = default)
+    public Task<ScanResult> ScanAllAsync(IProgress<ScanProgress>? progress = null, CancellationToken cancellationToken = default, bool forceRescan = false) =>
+        ScanRootsAsync(_database.GetScanRoots(), progress, cancellationToken, forceRescan);
+
+    public Task<ScanResult> ScanRootAsync(long rootId, IProgress<ScanProgress>? progress = null, CancellationToken cancellationToken = default, bool forceRescan = false)
     {
-        var roots = _database.GetScanRoots();
+        var root = _database.GetScanRoot(rootId);
+        return root is null
+            ? Task.FromResult(new ScanResult(0, 0, 0, 0, TimeSpan.Zero))
+            : ScanRootsAsync([root], progress, cancellationToken, forceRescan);
+    }
+
+    private async Task<ScanResult> ScanRootsAsync(IReadOnlyList<ScanRoot> roots, IProgress<ScanProgress>? progress, CancellationToken cancellationToken, bool forceRescan)
+    {
         var started = DateTime.UtcNow;
         var totalDiscovered = 0;
         var totalRegistered = 0;
+        var totalSkipped = 0;
         var totalFailed = 0;
+        var totalProcessed = 0;
 
         foreach (var root in roots)
         {
@@ -37,17 +49,17 @@ public sealed class ImageScanner
                 continue;
             }
 
-            var files = EnumeratePngFiles(root).ToList();
-            totalDiscovered += files.Count;
-            for (var index = 0; index < files.Count; index++)
+            foreach (var path in EnumeratePngFiles(root))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var path = files[index];
+                totalDiscovered++;
+                totalProcessed++;
                 progress?.Report(new ScanProgress
                 {
                     Discovered = totalDiscovered,
-                    Processed = index,
+                    Processed = totalProcessed,
                     Registered = totalRegistered,
+                    Skipped = totalSkipped,
                     Failed = totalFailed,
                     CurrentPath = path
                 });
@@ -55,6 +67,13 @@ public sealed class ImageScanner
                 try
                 {
                     var file = new FileInfo(path);
+                    var priorState = forceRescan ? null : _database.GetFileScanState(path);
+                    if (priorState is not null && priorState.FileSize == file.Length && priorState.LastWriteUtc == file.LastWriteTimeUtc)
+                    {
+                        _database.MarkLocationSeen(root.Id, path, rootStart);
+                        totalSkipped++;
+                        continue;
+                    }
                     PngMetadata metadata;
                     ParsedGeneration generation;
                     try
@@ -93,11 +112,12 @@ public sealed class ImageScanner
         progress?.Report(new ScanProgress
         {
             Discovered = totalDiscovered,
-            Processed = totalDiscovered,
+            Processed = totalProcessed,
             Registered = totalRegistered,
+            Skipped = totalSkipped,
             Failed = totalFailed
         });
-        return new ScanResult(totalDiscovered, totalRegistered, totalFailed, DateTime.UtcNow - started);
+        return new ScanResult(totalDiscovered, totalRegistered, totalSkipped, totalFailed, DateTime.UtcNow - started);
     }
 
     private static IEnumerable<string> EnumeratePngFiles(ScanRoot root)

@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using Promptarium.Models;
 using Promptarium.Services;
@@ -25,6 +27,9 @@ public partial class MainWindow : Window
     private int _currentPage;
     private int _totalResults;
     private bool _isLoading;
+    private bool _isScanning;
+    private CancellationTokenSource? _scanCancellation;
+    private readonly DispatcherTimer _searchDebounceTimer;
 
     public ObservableCollection<ImageCard> Cards => _cards;
     public IReadOnlyList<string> TagCategories => PromptClassifier.Categories;
@@ -35,17 +40,23 @@ public partial class MainWindow : Window
         DataContext = this;
         _database.Initialize();
         _scanner = new ImageScanner(_database, new PngMetadataReader(), new ComfyWorkflowParser(), new PromptClassifier());
+        _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _searchDebounceTimer.Tick += SearchDebounceTimer_Tick;
         TagsGrid.ItemsSource = _tags;
         RatingComboBox.SelectedIndex = 0;
         CategoryComboBox.ItemsSource = new[] { "すべて" }.Concat(PromptClassifier.Categories.Skip(1)).ToList();
         CategoryComboBox.SelectedIndex = 0;
         CopyCategoryComboBox.ItemsSource = PromptClassifier.Categories;
         CopyCategoryComboBox.SelectedIndex = 0;
+        ParseStatusComboBox.SelectedIndex = 0;
+        MinimumRatingComboBox.SelectedIndex = 0;
+        TagComboBox.AddHandler(System.Windows.Controls.TextBox.TextChangedEvent, new TextChangedEventHandler(FilterChanged));
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         await RefreshFilterListsAsync();
+        await RefreshScanRootsAsync();
         await RefreshLibraryAsync();
     }
 
@@ -64,51 +75,82 @@ public partial class MainWindow : Window
 
     private async void ScanAll_Click(object sender, RoutedEventArgs e) => await ScanAndRefreshAsync();
 
-    private async Task ScanAndRefreshAsync()
+    private async void ForceRescan_Click(object sender, RoutedEventArgs e) => await ScanAndRefreshAsync(forceRescan: true);
+
+    private void CancelScan_Click(object sender, RoutedEventArgs e) => _scanCancellation?.Cancel();
+
+    private async Task ScanAndRefreshAsync(bool forceRescan = false, long? rootId = null)
     {
-        if (!_database.GetScanRoots().Any())
+        if (_isScanning) return;
+        if (rootId is null && !_database.GetScanRoots().Any())
         {
             MessageBox.Show("先にスキャン対象のフォルダを追加してください。", "Promptarium", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        SetBusy(true, "スキャンを開始しています…");
+        _isScanning = true;
+        _scanCancellation = new CancellationTokenSource();
+        SetBusy(true, forceRescan ? "完全再解析を開始しています…" : "差分スキャンを開始しています…");
         try
         {
-            var progress = new Progress<ScanProgress>(value => StatusTextBlock.Text = $"スキャン中 {value.Processed}/{value.Discovered}件  登録: {value.Registered}  エラー: {value.Failed}");
-            var result = await _scanner.ScanAllAsync(progress);
-            StatusTextBlock.Text = $"スキャン完了: {result.Registered}/{result.Discovered}件、エラー {result.Failed}件（{result.Elapsed.TotalSeconds:F1}秒）";
+            var progress = new Progress<ScanProgress>(value => StatusTextBlock.Text = $"スキャン中 {value.Processed}/{value.Discovered}件  更新: {value.Registered}  変更なし: {value.Skipped}  エラー: {value.Failed}");
+            var result = rootId is { } id
+                ? await _scanner.ScanRootAsync(id, progress, _scanCancellation.Token, forceRescan)
+                : await _scanner.ScanAllAsync(progress, _scanCancellation.Token, forceRescan);
+            StatusTextBlock.Text = $"スキャン完了: 更新 {result.Registered}件、変更なし {result.Skipped}件、エラー {result.Failed}件（{result.Elapsed.TotalSeconds:F1}秒）";
             _currentPage = 0;
             await RefreshFilterListsAsync();
+            await RefreshScanRootsAsync();
             await RefreshLibraryAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            StatusTextBlock.Text = "スキャンを中止しました。登録済みの結果は保持されています。";
         }
         catch (Exception exception)
         {
+            AppLogger.Error("スキャン処理", exception);
             MessageBox.Show(exception.Message, "スキャンエラー", MessageBoxButton.OK, MessageBoxImage.Error);
             StatusTextBlock.Text = "スキャンに失敗しました。";
         }
         finally
         {
+            _scanCancellation?.Dispose();
+            _scanCancellation = null;
+            _isScanning = false;
             SetBusy(false);
         }
     }
 
-    private async void FilterChanged(object sender, RoutedEventArgs e)
+    private void FilterChanged(object sender, RoutedEventArgs e)
     {
         if (_isLoading) return;
         _currentPage = 0;
-        await RefreshLibraryAsync();
+        _searchDebounceTimer.Stop();
+        _searchDebounceTimer.Start();
+    }
+
+    private void TagComboBox_KeyUp(object sender, System.Windows.Input.KeyEventArgs e) => FilterChanged(sender, e);
+
+    private async void SearchDebounceTimer_Tick(object? sender, EventArgs e)
+    {
+        _searchDebounceTimer.Stop();
+        await RefreshLibraryAsync(saveSearchHistory: true);
     }
 
     private async void ClearFilters_Click(object sender, RoutedEventArgs e)
     {
         _isLoading = true;
         SearchTextBox.Clear();
-        TagTextBox.Clear();
+        TagComboBox.Text = string.Empty;
         ModelComboBox.SelectedIndex = 0;
         LoraComboBox.SelectedIndex = 0;
         CategoryComboBox.SelectedIndex = 0;
         FavoritesOnlyCheckBox.IsChecked = false;
+        ParseStatusComboBox.SelectedIndex = 0;
+        MinimumRatingComboBox.SelectedIndex = 0;
+        MinimumWidthTextBox.Clear();
+        MinimumHeightTextBox.Clear();
         _isLoading = false;
         _currentPage = 0;
         await RefreshLibraryAsync();
@@ -118,25 +160,32 @@ public partial class MainWindow : Window
     {
         var selectedModel = SelectedFilter(ModelComboBox);
         var selectedLora = SelectedFilter(LoraComboBox);
+        var tagText = TagComboBox.Text;
         var models = await Task.Run(_database.GetModels);
         var loras = await Task.Run(_database.GetLoras);
+        var tags = await Task.Run(() => _database.GetTagSuggestions(tagText, 100));
+        var recentSearches = await Task.Run(() => _database.GetRecentSearches());
         _isLoading = true;
         ModelComboBox.ItemsSource = new[] { "すべて" }.Concat(models).ToList();
         LoraComboBox.ItemsSource = new[] { "すべて" }.Concat(loras).ToList();
         ModelComboBox.SelectedItem = models.Contains(selectedModel) ? selectedModel : "すべて";
         LoraComboBox.SelectedItem = loras.Contains(selectedLora) ? selectedLora : "すべて";
+        TagComboBox.ItemsSource = tags;
+        TagComboBox.Text = tagText;
+        RecentSearchComboBox.ItemsSource = new[] { "最近の検索" }.Concat(recentSearches).ToList();
+        RecentSearchComboBox.SelectedIndex = 0;
         _isLoading = false;
     }
 
-    private async Task RefreshLibraryAsync()
+    private async Task RefreshLibraryAsync(bool saveSearchHistory = false)
     {
         if (_isLoading) return;
         SetBusy(true, "ライブラリを読み込んでいます…");
         try
         {
-            var filter = GetFilter();
-            _totalResults = await Task.Run(() => _database.CountSearchResults(filter.Text, filter.Model, filter.Lora, filter.Tag, filter.Category, filter.FavoritesOnly));
-            var summaries = await Task.Run(() => _database.Search(filter.Text, filter.Model, filter.Lora, filter.Tag, filter.Category, filter.FavoritesOnly, PageSize, _currentPage * PageSize));
+            var filter = GetSearch();
+            _totalResults = await Task.Run(() => _database.CountSearchResults(filter));
+            var summaries = await Task.Run(() => _database.Search(filter, PageSize, _currentPage * PageSize));
             var cards = await Task.Run(() => summaries.Select(summary => new ImageCard(summary, ThumbnailLoader.Load(summary.PrimaryPath))).ToList());
             _cards.Clear();
             foreach (var card in cards) _cards.Add(card);
@@ -144,6 +193,10 @@ public partial class MainWindow : Window
             if (_currentPage >= pages) _currentPage = Math.Max(0, pages - 1);
             PageTextBlock.Text = $"{_totalResults:N0}件  /  {pages}ページ中 {_currentPage + 1}ページ目";
             if (StatusTextBlock.Text.Contains("読み込んで")) StatusTextBlock.Text = $"{_totalResults:N0}件を表示できます。";
+            if (saveSearchHistory && !string.IsNullOrWhiteSpace(filter.Text))
+            {
+                await Task.Run(() => _database.SaveRecentSearch(filter.Text));
+            }
         }
         finally
         {
@@ -171,9 +224,28 @@ public partial class MainWindow : Window
         PositiveTextBox.Text = detail.ManualPositivePrompt ?? detail.PositivePrompt ?? string.Empty;
         NegativeTextBox.Text = detail.ManualNegativePrompt ?? detail.NegativePrompt ?? string.Empty;
         ModelTextBox.Text = detail.ManualModelName ?? detail.ModelName ?? string.Empty;
-        PositiveSourceTextBlock.Text = detail.ManualPositivePrompt is null ? "情報源: メタデータ抽出（編集すると手動入力として保存）" : "情報源: ユーザー入力";
-        NegativeSourceTextBlock.Text = detail.ManualNegativePrompt is null ? "情報源: メタデータ抽出（編集すると手動入力として保存）" : "情報源: ユーザー入力";
-        GenerationInfoTextBlock.Text = $"解析値（{detail.ParseSource ?? "解析できませんでした"}）\nLoRA: {FormatLoras(detail.LorasJson)}\nVAE: {detail.VaeName ?? "—"}  /  Seed: {detail.Seed ?? "—"}  /  Steps: {detail.Steps ?? "—"}  /  CFG: {detail.Cfg ?? "—"}\nSampler: {detail.Sampler ?? "—"}  /  Scheduler: {detail.Scheduler ?? "—"}\n画像サイズ: {detail.Width} × {detail.Height} px（PNG IHDR）";
+        var sources = ReadValueSources(detail.ValueSourcesJson);
+        var positiveSource = SourceOf(detail.ManualPositivePrompt, "positive_prompt", sources);
+        var negativeSource = SourceOf(detail.ManualNegativePrompt, "negative_prompt", sources);
+        var modelSource = SourceOf(detail.ManualModelName, "model_name", sources);
+        var loraSource = SourceOf(null, "loras", sources);
+        var vaeSource = SourceOf(detail.ManualVaeName, "vae_name", sources);
+        var seedSource = SourceOf(detail.ManualSeed, "seed", sources);
+        var stepsSource = SourceOf(detail.ManualSteps, "steps", sources);
+        var cfgSource = SourceOf(detail.ManualCfg, "cfg", sources);
+        var samplerSource = SourceOf(detail.ManualSampler, "sampler", sources);
+        var schedulerSource = SourceOf(detail.ManualScheduler, "scheduler", sources);
+        var displayedWidth = detail.ManualWidth ?? detail.WorkflowWidth ?? detail.Width.ToString();
+        var displayedHeight = detail.ManualHeight ?? detail.WorkflowHeight ?? detail.Height.ToString();
+        var widthSource = !string.IsNullOrWhiteSpace(detail.ManualWidth)
+            ? "ユーザー入力"
+            : !string.IsNullOrWhiteSpace(detail.WorkflowWidth) ? SourceOf(null, "workflow_width", sources) : SourceOf(null, "width", sources);
+        var heightSource = !string.IsNullOrWhiteSpace(detail.ManualHeight)
+            ? "ユーザー入力"
+            : !string.IsNullOrWhiteSpace(detail.WorkflowHeight) ? SourceOf(null, "workflow_height", sources) : SourceOf(null, "height", sources);
+        PositiveSourceTextBlock.Text = $"情報源: {positiveSource}";
+        NegativeSourceTextBlock.Text = $"情報源: {negativeSource}";
+        GenerationInfoTextBlock.Text = $"解析値（{detail.ParseSource ?? "解析できませんでした"}）\nモデル: {detail.ManualModelName ?? detail.ModelName ?? "—"} [{modelSource}]\nLoRA: {FormatLoras(detail.LorasJson)} [{loraSource}]\nVAE: {detail.ManualVaeName ?? detail.VaeName ?? "—"} [{vaeSource}]  /  Seed: {detail.ManualSeed ?? detail.Seed ?? "—"} [{seedSource}]\nSteps: {detail.ManualSteps ?? detail.Steps ?? "—"} [{stepsSource}]  /  CFG: {detail.ManualCfg ?? detail.Cfg ?? "—"} [{cfgSource}]\nSampler: {detail.ManualSampler ?? detail.Sampler ?? "—"} [{samplerSource}]  /  Scheduler: {detail.ManualScheduler ?? detail.Scheduler ?? "—"} [{schedulerSource}]\n生成サイズ: {displayedWidth} × {displayedHeight} px [{widthSource} / {heightSource}]\nPNG画像サイズ: {detail.Width} × {detail.Height} px [PNG IHDR]";
         VaeTextBox.Text = detail.ManualVaeName ?? string.Empty;
         SeedTextBox.Text = detail.ManualSeed ?? string.Empty;
         StepsTextBox.Text = detail.ManualSteps ?? string.Empty;
@@ -283,15 +355,81 @@ public partial class MainWindow : Window
         await RefreshLibraryAsync();
     }
 
-    private (string Text, string Model, string Lora, string Tag, string Category, bool FavoritesOnly) GetFilter() =>
-        (SearchTextBox.Text, SelectedFilter(ModelComboBox), SelectedFilter(LoraComboBox), TagTextBox.Text, SelectedFilter(CategoryComboBox), FavoritesOnlyCheckBox.IsChecked == true);
+    private void ToggleScanRoots_Click(object sender, RoutedEventArgs e)
+    {
+        ScanRootsPanel.Visibility = ScanRootsPanel.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private async void ScanSelectedRoot_Click(object sender, RoutedEventArgs e)
+    {
+        if (ScanRootsListBox.SelectedItem is ScanRoot root) await ScanAndRefreshAsync(rootId: root.Id);
+    }
+
+    private async void ToggleSelectedRoot_Click(object sender, RoutedEventArgs e)
+    {
+        if (ScanRootsListBox.SelectedItem is not ScanRoot root) return;
+        _database.SetScanRootEnabled(root.Id, !root.IsEnabled);
+        await RefreshScanRootsAsync();
+    }
+
+    private async void DeleteSelectedRoot_Click(object sender, RoutedEventArgs e)
+    {
+        if (ScanRootsListBox.SelectedItem is not ScanRoot root) return;
+        if (MessageBox.Show($"スキャン対象から削除しますか？\n{root.Path}\n画像資産と過去の場所情報は削除しません。", "フォルダ管理", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        _database.DeleteScanRoot(root.Id);
+        await RefreshScanRootsAsync();
+        StatusTextBlock.Text = "スキャン対象を削除しました。";
+    }
+
+    private void ShowDiagnostics_Click(object sender, RoutedEventArgs e) => new DiagnosticsWindow { Owner = this }.Show();
+
+    private async void RecentSearchChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isLoading || RecentSearchComboBox.SelectedItem is not string query || query == "最近の検索") return;
+        SearchTextBox.Text = query;
+        _currentPage = 0;
+        await RefreshLibraryAsync();
+    }
+
+    private async Task RefreshScanRootsAsync()
+    {
+        var selectedId = (ScanRootsListBox.SelectedItem as ScanRoot)?.Id;
+        var roots = await Task.Run(() => _database.GetScanRoots(includeDisabled: true));
+        ScanRootsListBox.ItemsSource = roots;
+        ScanRootsListBox.SelectedItem = roots.FirstOrDefault(root => root.Id == selectedId);
+    }
+
+    private LibrarySearch GetSearch() => new()
+    {
+        Text = SearchTextBox.Text,
+        Model = SelectedFilter(ModelComboBox),
+        Lora = SelectedFilter(LoraComboBox),
+        Tag = TagComboBox.Text,
+        Category = SelectedFilter(CategoryComboBox),
+        FavoritesOnly = FavoritesOnlyCheckBox.IsChecked == true,
+        ParseStatus = SelectedParseStatus(),
+        MinimumRating = MinimumRatingComboBox.SelectedIndex,
+        MinimumWidth = ReadNonNegativeInt(MinimumWidthTextBox.Text),
+        MinimumHeight = ReadNonNegativeInt(MinimumHeightTextBox.Text)
+    };
 
     private static string SelectedFilter(System.Windows.Controls.ComboBox comboBox) => comboBox.SelectedItem as string is { } value && value != "すべて" ? value : string.Empty;
+    private ParseStatus? SelectedParseStatus() => ParseStatusComboBox.SelectedIndex <= 0 ? null : (ParseStatus)(ParseStatusComboBox.SelectedIndex - 1);
+    private static int ReadNonNegativeInt(string? value) => int.TryParse(value, out var result) ? Math.Max(0, result) : 0;
     private static string? ManualValue(string? value, string? extracted) => string.Equals(value?.Trim(), extracted?.Trim(), StringComparison.Ordinal) ? null : value?.Trim();
     private static bool HasManualGenerationValues(ImageDetail detail) => new[] { detail.ManualVaeName, detail.ManualSeed, detail.ManualSteps, detail.ManualCfg, detail.ManualSampler, detail.ManualScheduler, detail.ManualWidth, detail.ManualHeight }.Any(value => !string.IsNullOrWhiteSpace(value));
     private void CopyText(string text, string status) { if (!string.IsNullOrWhiteSpace(text)) { Clipboard.SetText(text); StatusTextBlock.Text = status; } }
     private void SetBusy(bool busy, string? status = null) { if (status is not null) StatusTextBlock.Text = status; Mouse.OverrideCursor = busy ? System.Windows.Input.Cursors.Wait : null; }
     private static string StatusLabel(ParseStatus status) => status switch { ParseStatus.Parsed => "解析済み", ParseStatus.Partial => "一部解析", ParseStatus.UnknownNodes => "未知ノードを含む", ParseStatus.NoMetadata => "生成情報なし", ParseStatus.Corrupt => "メタデータ破損", _ => "解析不能" };
+
+    private static Dictionary<string, string> ReadValueSources(string? json)
+    {
+        try { return JsonSerializer.Deserialize<Dictionary<string, string>>(json ?? "{}") ?? []; }
+        catch { return []; }
+    }
+
+    private static string SourceOf(string? manualValue, string field, IReadOnlyDictionary<string, string> sources) =>
+        !string.IsNullOrWhiteSpace(manualValue) ? "ユーザー入力" : sources.GetValueOrDefault(field, "情報なし");
 
     private static string FormatLoras(string? json)
     {

@@ -68,6 +68,9 @@ public sealed class LibraryDatabase
                 parse_status TEXT NOT NULL,
                 parse_message TEXT NULL,
                 value_source TEXT NULL,
+                value_sources_json TEXT NULL,
+                workflow_width TEXT NULL,
+                workflow_height TEXT NULL,
                 parser_version TEXT NOT NULL,
                 parsed_utc TEXT NOT NULL
             );
@@ -105,9 +108,17 @@ public sealed class LibraryDatabase
             );
             CREATE INDEX IF NOT EXISTS ix_prompt_tags_asset ON prompt_tags(asset_id);
             CREATE INDEX IF NOT EXISTS ix_prompt_tags_category ON prompt_tags(category);
+            CREATE TABLE IF NOT EXISTS search_history (
+                query_text TEXT PRIMARY KEY,
+                last_used_utc TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_search_history_last_used ON search_history(last_used_utc DESC);
             """;
         command.ExecuteNonQuery();
         EnsureColumn(connection, "generation_records", "value_source TEXT NULL");
+        EnsureColumn(connection, "generation_records", "value_sources_json TEXT NULL");
+        EnsureColumn(connection, "generation_records", "workflow_width TEXT NULL");
+        EnsureColumn(connection, "generation_records", "workflow_height TEXT NULL");
     }
 
     public long UpsertScanRoot(string path, bool includeSubfolders = true)
@@ -127,11 +138,13 @@ public sealed class LibraryDatabase
         return Convert.ToInt64(command.ExecuteScalar());
     }
 
-    public IReadOnlyList<ScanRoot> GetScanRoots()
+    public IReadOnlyList<ScanRoot> GetScanRoots(bool includeDisabled = false)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id, path, include_subfolders, is_enabled FROM scan_roots WHERE is_enabled = 1 ORDER BY path";
+        command.CommandText = includeDisabled
+            ? "SELECT id, path, include_subfolders, is_enabled, last_scanned_utc FROM scan_roots ORDER BY path"
+            : "SELECT id, path, include_subfolders, is_enabled, last_scanned_utc FROM scan_roots WHERE is_enabled = 1 ORDER BY path";
         using var reader = command.ExecuteReader();
         var roots = new List<ScanRoot>();
         while (reader.Read())
@@ -141,11 +154,73 @@ public sealed class LibraryDatabase
                 Id = reader.GetInt64(0),
                 Path = reader.GetString(1),
                 IncludeSubfolders = reader.GetInt64(2) == 1,
-                IsEnabled = reader.GetInt64(3) == 1
+                IsEnabled = reader.GetInt64(3) == 1,
+                LastScannedUtc = reader.IsDBNull(4) ? null : ParseUtc(reader.GetString(4))
             });
         }
 
         return roots;
+    }
+
+    public ScanRoot? GetScanRoot(long rootId) => GetScanRoots(includeDisabled: true).FirstOrDefault(root => root.Id == rootId);
+
+    public void SetScanRootEnabled(long rootId, bool isEnabled)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE scan_roots SET is_enabled = $enabled WHERE id = $id";
+        command.Parameters.AddWithValue("$enabled", isEnabled ? 1 : 0);
+        command.Parameters.AddWithValue("$id", rootId);
+        command.ExecuteNonQuery();
+    }
+
+    public void DeleteScanRoot(long rootId)
+    {
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using (var markLocations = connection.CreateCommand())
+        {
+            markLocations.Transaction = transaction;
+            markLocations.CommandText = "UPDATE file_locations SET availability = 0, root_id = NULL WHERE root_id = $id";
+            markLocations.Parameters.AddWithValue("$id", rootId);
+            markLocations.ExecuteNonQuery();
+        }
+        using (var deleteRoot = connection.CreateCommand())
+        {
+            deleteRoot.Transaction = transaction;
+            deleteRoot.CommandText = "DELETE FROM scan_roots WHERE id = $id";
+            deleteRoot.Parameters.AddWithValue("$id", rootId);
+            deleteRoot.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    public FileScanState? GetFileScanState(string path)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT l.asset_id, a.content_hash, l.file_size, l.last_write_utc
+            FROM file_locations l
+            JOIN image_assets a ON a.id = l.asset_id
+            WHERE l.path = $path;
+            """;
+        command.Parameters.AddWithValue("$path", path);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new FileScanState(reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2), ParseUtc(reader.GetString(3)))
+            : null;
+    }
+
+    public void MarkLocationSeen(long rootId, string path, DateTime scanStartedUtc)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE file_locations SET root_id = $rootId, availability = 1, last_seen_utc = $seen WHERE path = $path";
+        command.Parameters.AddWithValue("$rootId", rootId);
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$seen", scanStartedUtc.ToUniversalTime().ToString("O"));
+        command.ExecuteNonQuery();
     }
 
     public long UpsertImage(long rootId, string fullPath, FileInfo file, string hash, PngMetadata metadata, ParsedGeneration generation, IReadOnlyList<PromptTag> automaticTags, DateTime scanStartedUtc)
@@ -176,7 +251,10 @@ public sealed class LibraryDatabase
         command.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<ImageSummary> Search(string? text, string? model, string? lora, string? tag, string? category, bool favoritesOnly, int limit, int offset)
+    public IReadOnlyList<ImageSummary> Search(string? text, string? model, string? lora, string? tag, string? category, bool favoritesOnly, int limit, int offset) =>
+        Search(new LibrarySearch { Text = text ?? string.Empty, Model = model ?? string.Empty, Lora = lora ?? string.Empty, Tag = tag ?? string.Empty, Category = category ?? string.Empty, FavoritesOnly = favoritesOnly }, limit, offset);
+
+    public IReadOnlyList<ImageSummary> Search(LibrarySearch search, int limit, int offset)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
@@ -198,15 +276,14 @@ public sealed class LibraryDatabase
               AND ($lora = '' OR lower(COALESCE(g.loras_json, '')) LIKE '%' || lower($lora) || '%')
               AND ($tag = '' OR EXISTS (SELECT 1 FROM prompt_tags t WHERE t.asset_id = a.id AND lower(t.normalized_text) LIKE '%' || lower($tag) || '%'))
               AND ($category = '' OR EXISTS (SELECT 1 FROM prompt_tags tc WHERE tc.asset_id = a.id AND tc.category = $category))
+              AND ($parseStatus = '' OR COALESCE(g.parse_status, 'NoMetadata') = $parseStatus)
+              AND ($minimumRating = 0 OR COALESCE(u.rating, 0) >= $minimumRating)
+              AND ($minimumWidth = 0 OR a.width >= $minimumWidth)
+              AND ($minimumHeight = 0 OR a.height >= $minimumHeight)
             ORDER BY l.last_write_utc DESC, a.id DESC
             LIMIT $limit OFFSET $offset;
             """;
-        command.Parameters.AddWithValue("$favoritesOnly", favoritesOnly ? 1 : 0);
-        command.Parameters.AddWithValue("$text", text?.Trim() ?? string.Empty);
-        command.Parameters.AddWithValue("$model", model?.Trim() ?? string.Empty);
-        command.Parameters.AddWithValue("$lora", lora?.Trim() ?? string.Empty);
-        command.Parameters.AddWithValue("$tag", tag?.Trim() ?? string.Empty);
-        command.Parameters.AddWithValue("$category", category?.Trim() ?? string.Empty);
+        AddSearchParameters(command, search);
         command.Parameters.AddWithValue("$limit", limit);
         command.Parameters.AddWithValue("$offset", offset);
         using var reader = command.ExecuteReader();
@@ -215,21 +292,30 @@ public sealed class LibraryDatabase
         return records;
     }
 
-    public int CountSearchResults(string? text, string? model, string? lora, string? tag, string? category, bool favoritesOnly)
+    public int CountSearchResults(string? text, string? model, string? lora, string? tag, string? category, bool favoritesOnly) =>
+        CountSearchResults(new LibrarySearch { Text = text ?? string.Empty, Model = model ?? string.Empty, Lora = lora ?? string.Empty, Tag = tag ?? string.Empty, Category = category ?? string.Empty, FavoritesOnly = favoritesOnly });
+
+    public int CountSearchResults(LibrarySearch search)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT COUNT(*) FROM image_assets a
+            LEFT JOIN generation_records g ON g.asset_id = a.id
+            LEFT JOIN user_edits u ON u.asset_id = a.id
             WHERE EXISTS (SELECT 1 FROM file_locations l WHERE l.asset_id = a.id AND l.availability = 1)
-              AND ($favoritesOnly = 0 OR COALESCE((SELECT is_favorite FROM user_edits u WHERE u.asset_id = a.id), 0) = 1)
-              AND ($text = '' OR lower(COALESCE((SELECT positive_prompt FROM user_edits u WHERE u.asset_id = a.id), (SELECT positive_prompt FROM generation_records g WHERE g.asset_id = a.id), '') || ' ' || COALESCE((SELECT negative_prompt FROM user_edits u WHERE u.asset_id = a.id), (SELECT negative_prompt FROM generation_records g WHERE g.asset_id = a.id), '') || ' ' || COALESCE((SELECT model_name FROM user_edits u WHERE u.asset_id = a.id), (SELECT model_name FROM generation_records g WHERE g.asset_id = a.id), '') || ' ' || COALESCE((SELECT note FROM user_edits u WHERE u.asset_id = a.id), '')) LIKE '%' || lower($text) || '%')
-              AND ($model = '' OR lower(COALESCE((SELECT model_name FROM user_edits u WHERE u.asset_id = a.id), (SELECT model_name FROM generation_records g WHERE g.asset_id = a.id), '')) LIKE '%' || lower($model) || '%')
-              AND ($lora = '' OR lower(COALESCE((SELECT loras_json FROM generation_records g WHERE g.asset_id = a.id), '')) LIKE '%' || lower($lora) || '%')
+              AND ($favoritesOnly = 0 OR COALESCE(u.is_favorite, 0) = 1)
+              AND ($text = '' OR lower(COALESCE(u.positive_prompt, g.positive_prompt, '') || ' ' || COALESCE(u.negative_prompt, g.negative_prompt, '') || ' ' || COALESCE(u.model_name, g.model_name, '') || ' ' || COALESCE(u.note, '')) LIKE '%' || lower($text) || '%')
+              AND ($model = '' OR lower(COALESCE(u.model_name, g.model_name, '')) LIKE '%' || lower($model) || '%')
+              AND ($lora = '' OR lower(COALESCE(g.loras_json, '')) LIKE '%' || lower($lora) || '%')
               AND ($tag = '' OR EXISTS (SELECT 1 FROM prompt_tags t WHERE t.asset_id = a.id AND lower(t.normalized_text) LIKE '%' || lower($tag) || '%'))
-              AND ($category = '' OR EXISTS (SELECT 1 FROM prompt_tags tc WHERE tc.asset_id = a.id AND tc.category = $category));
+              AND ($category = '' OR EXISTS (SELECT 1 FROM prompt_tags tc WHERE tc.asset_id = a.id AND tc.category = $category))
+              AND ($parseStatus = '' OR COALESCE(g.parse_status, 'NoMetadata') = $parseStatus)
+              AND ($minimumRating = 0 OR COALESCE(u.rating, 0) >= $minimumRating)
+              AND ($minimumWidth = 0 OR a.width >= $minimumWidth)
+              AND ($minimumHeight = 0 OR a.height >= $minimumHeight);
             """;
-        AddSearchParameters(command, text, model, lora, tag, category, favoritesOnly);
+        AddSearchParameters(command, search);
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
@@ -245,7 +331,7 @@ public sealed class LibraryDatabase
                    a.width, a.height, g.positive_prompt, g.negative_prompt, g.model_name, g.loras_json, g.parse_status,
                    COALESCE(u.is_favorite, 0), u.rating, u.note,
                    (SELECT COUNT(*) FROM file_locations lc WHERE lc.asset_id = a.id AND lc.availability = 1),
-                   g.raw_metadata, g.prompt_json, g.workflow_json, g.vae_name, g.seed, g.steps, g.cfg, g.sampler, g.scheduler, g.parse_message, g.value_source,
+                   g.raw_metadata, g.prompt_json, g.workflow_json, g.vae_name, g.seed, g.steps, g.cfg, g.sampler, g.scheduler, g.parse_message, g.value_source, g.value_sources_json, g.workflow_width, g.workflow_height,
                    u.positive_prompt, u.negative_prompt, u.model_name,
                    o.vae_name, o.seed, o.steps, o.cfg, o.sampler, o.scheduler, o.width, o.height
             FROM image_assets a
@@ -266,9 +352,10 @@ public sealed class LibraryDatabase
             ParseStatus = ParseStatusValue(GetString(reader, 11)), IsFavorite = reader.GetInt64(12) == 1, Rating = GetNullableInt(reader, 13), Note = GetString(reader, 14), LocationCount = reader.GetInt32(15),
             RawMetadata = GetString(reader, 16), PromptJson = GetString(reader, 17), WorkflowJson = GetString(reader, 18), VaeName = GetString(reader, 19),
             Seed = GetString(reader, 20), Steps = GetString(reader, 21), Cfg = GetString(reader, 22), Sampler = GetString(reader, 23), Scheduler = GetString(reader, 24),
-            ParseMessage = GetString(reader, 25), ParseSource = GetString(reader, 26), ManualPositivePrompt = GetString(reader, 27), ManualNegativePrompt = GetString(reader, 28), ManualModelName = GetString(reader, 29),
-            ManualVaeName = GetString(reader, 30), ManualSeed = GetString(reader, 31), ManualSteps = GetString(reader, 32), ManualCfg = GetString(reader, 33),
-            ManualSampler = GetString(reader, 34), ManualScheduler = GetString(reader, 35), ManualWidth = GetString(reader, 36), ManualHeight = GetString(reader, 37)
+            ParseMessage = GetString(reader, 25), ParseSource = GetString(reader, 26), ValueSourcesJson = GetString(reader, 27), WorkflowWidth = GetString(reader, 28), WorkflowHeight = GetString(reader, 29),
+            ManualPositivePrompt = GetString(reader, 30), ManualNegativePrompt = GetString(reader, 31), ManualModelName = GetString(reader, 32),
+            ManualVaeName = GetString(reader, 33), ManualSeed = GetString(reader, 34), ManualSteps = GetString(reader, 35), ManualCfg = GetString(reader, 36),
+            ManualSampler = GetString(reader, 37), ManualScheduler = GetString(reader, 38), ManualWidth = GetString(reader, 39), ManualHeight = GetString(reader, 40)
         };
         reader.Close();
 
@@ -379,6 +466,54 @@ public sealed class LibraryDatabase
         return names.ToList();
     }
 
+    public IReadOnlyList<string> GetTagSuggestions(string? prefix, int limit = 100)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT normalized_text
+            FROM prompt_tags
+            WHERE ($prefix = '' OR lower(normalized_text) LIKE lower($prefix) || '%')
+            GROUP BY normalized_text
+            ORDER BY COUNT(*) DESC, normalized_text
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$prefix", prefix?.Trim() ?? string.Empty);
+        command.Parameters.AddWithValue("$limit", limit);
+        using var reader = command.ExecuteReader();
+        var tags = new List<string>();
+        while (reader.Read()) tags.Add(reader.GetString(0));
+        return tags;
+    }
+
+    public void SaveRecentSearch(string? query)
+    {
+        var normalized = query?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized)) return;
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO search_history(query_text, last_used_utc)
+            VALUES($query, $now)
+            ON CONFLICT(query_text) DO UPDATE SET last_used_utc = excluded.last_used_utc;
+            """;
+        command.Parameters.AddWithValue("$query", normalized);
+        command.Parameters.AddWithValue("$now", UtcNow());
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<string> GetRecentSearches(int limit = 12)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT query_text FROM search_history ORDER BY last_used_utc DESC LIMIT $limit";
+        command.Parameters.AddWithValue("$limit", limit);
+        using var reader = command.ExecuteReader();
+        var queries = new List<string>();
+        while (reader.Read()) queries.Add(reader.GetString(0));
+        return queries;
+    }
+
     public void BackupTo(string destination)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -453,14 +588,15 @@ public sealed class LibraryDatabase
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO generation_records(asset_id, raw_metadata, prompt_json, workflow_json, positive_prompt, negative_prompt, model_name, loras_json, vae_name, seed, steps, cfg, sampler, scheduler, parse_status, parse_message, value_source, parser_version, parsed_utc)
-            VALUES($assetId, $rawMetadata, $prompt, $workflow, $positive, $negative, $model, $loras, $vae, $seed, $steps, $cfg, $sampler, $scheduler, $status, $message, $valueSource, $version, $now)
+            INSERT INTO generation_records(asset_id, raw_metadata, prompt_json, workflow_json, positive_prompt, negative_prompt, model_name, loras_json, vae_name, seed, steps, cfg, sampler, scheduler, parse_status, parse_message, value_source, value_sources_json, workflow_width, workflow_height, parser_version, parsed_utc)
+            VALUES($assetId, $rawMetadata, $prompt, $workflow, $positive, $negative, $model, $loras, $vae, $seed, $steps, $cfg, $sampler, $scheduler, $status, $message, $valueSource, $valueSources, $workflowWidth, $workflowHeight, $version, $now)
             ON CONFLICT(asset_id) DO UPDATE SET
                 raw_metadata = excluded.raw_metadata, prompt_json = excluded.prompt_json, workflow_json = excluded.workflow_json,
                 positive_prompt = excluded.positive_prompt, negative_prompt = excluded.negative_prompt, model_name = excluded.model_name,
                 loras_json = excluded.loras_json, vae_name = excluded.vae_name, seed = excluded.seed, steps = excluded.steps,
                 cfg = excluded.cfg, sampler = excluded.sampler, scheduler = excluded.scheduler, parse_status = excluded.parse_status,
-                parse_message = excluded.parse_message, value_source = excluded.value_source, parser_version = excluded.parser_version, parsed_utc = excluded.parsed_utc;
+                parse_message = excluded.parse_message, value_source = excluded.value_source, value_sources_json = excluded.value_sources_json,
+                workflow_width = excluded.workflow_width, workflow_height = excluded.workflow_height, parser_version = excluded.parser_version, parsed_utc = excluded.parsed_utc;
             """;
         command.Parameters.AddWithValue("$assetId", assetId);
         command.Parameters.AddWithValue("$rawMetadata", JsonSerializer.Serialize(metadata.Text));
@@ -479,6 +615,14 @@ public sealed class LibraryDatabase
         command.Parameters.AddWithValue("$status", generation.Status.ToString());
         command.Parameters.AddWithValue("$message", DbValue(generation.Message));
         command.Parameters.AddWithValue("$valueSource", DbValue(generation.ValueSource));
+        var valueSources = new Dictionary<string, string>(generation.ValueSources, StringComparer.Ordinal)
+        {
+            ["width"] = "PNG IHDR",
+            ["height"] = "PNG IHDR"
+        };
+        command.Parameters.AddWithValue("$valueSources", JsonSerializer.Serialize(valueSources));
+        command.Parameters.AddWithValue("$workflowWidth", DbValue(generation.WorkflowWidth));
+        command.Parameters.AddWithValue("$workflowHeight", DbValue(generation.WorkflowHeight));
         command.Parameters.AddWithValue("$version", ComfyWorkflowParser.Version);
         command.Parameters.AddWithValue("$now", now);
         command.ExecuteNonQuery();
@@ -511,7 +655,6 @@ public sealed class LibraryDatabase
         {
             using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
-            insert.CommandText = "INSERT INTO prompt_tags(asset_id, prompt_kind, ordinal, raw_text, normalized_text, category, source) VALUES($assetId, $kind, $ordinal, $raw, $normalized, $category, 'automatic')";
             insert.Parameters.AddWithValue("$assetId", assetId);
             insert.Parameters.AddWithValue("$kind", tag.PromptKind);
             insert.Parameters.AddWithValue("$ordinal", tag.Ordinal);
@@ -566,14 +709,18 @@ public sealed class LibraryDatabase
         IsFavorite = reader.GetInt64(12) == 1, Rating = GetNullableInt(reader, 13), Note = GetString(reader, 14), LocationCount = reader.GetInt32(15)
     };
 
-    private static void AddSearchParameters(SqliteCommand command, string? text, string? model, string? lora, string? tag, string? category, bool favoritesOnly)
+    private static void AddSearchParameters(SqliteCommand command, LibrarySearch search)
     {
-        command.Parameters.AddWithValue("$favoritesOnly", favoritesOnly ? 1 : 0);
-        command.Parameters.AddWithValue("$text", text?.Trim() ?? string.Empty);
-        command.Parameters.AddWithValue("$model", model?.Trim() ?? string.Empty);
-        command.Parameters.AddWithValue("$lora", lora?.Trim() ?? string.Empty);
-        command.Parameters.AddWithValue("$tag", tag?.Trim() ?? string.Empty);
-        command.Parameters.AddWithValue("$category", category?.Trim() ?? string.Empty);
+        command.Parameters.AddWithValue("$favoritesOnly", search.FavoritesOnly ? 1 : 0);
+        command.Parameters.AddWithValue("$text", search.Text.Trim());
+        command.Parameters.AddWithValue("$model", search.Model.Trim());
+        command.Parameters.AddWithValue("$lora", search.Lora.Trim());
+        command.Parameters.AddWithValue("$tag", search.Tag.Trim());
+        command.Parameters.AddWithValue("$category", search.Category.Trim());
+        command.Parameters.AddWithValue("$parseStatus", search.ParseStatus?.ToString() ?? string.Empty);
+        command.Parameters.AddWithValue("$minimumRating", Math.Clamp(search.MinimumRating, 0, 5));
+        command.Parameters.AddWithValue("$minimumWidth", Math.Max(search.MinimumWidth, 0));
+        command.Parameters.AddWithValue("$minimumHeight", Math.Max(search.MinimumHeight, 0));
     }
 
     private static string? GetString(SqliteDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);

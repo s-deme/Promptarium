@@ -46,7 +46,11 @@ public sealed class ComfyWorkflowParser
                 var inputs = GetInputs(node);
                 if (classType.Contains("CLIPTextEncode", StringComparison.OrdinalIgnoreCase))
                 {
-                    var text = GetInputString(inputs, "text");
+                    var text = GetInputString(inputs, "text")
+                               ?? GetInputString(inputs, "t5xxl")
+                               ?? GetInputString(inputs, "clip_l")
+                               ?? GetInputString(inputs, "text_g")
+                               ?? GetInputString(inputs, "text_l");
                     if (!string.IsNullOrWhiteSpace(text))
                     {
                         textNodes[nodeId] = text;
@@ -61,9 +65,11 @@ public sealed class ComfyWorkflowParser
                     result.Sampler ??= GetInputScalar(inputs, "sampler_name");
                     result.Scheduler ??= GetInputScalar(inputs, "scheduler");
                 }
-                else if (classType.Contains("CheckpointLoader", StringComparison.OrdinalIgnoreCase))
+                else if (classType.Contains("CheckpointLoader", StringComparison.OrdinalIgnoreCase) ||
+                         classType.Contains("UNETLoader", StringComparison.OrdinalIgnoreCase) ||
+                         classType.Contains("ModelLoader", StringComparison.OrdinalIgnoreCase))
                 {
-                    result.ModelName ??= GetInputScalar(inputs, "ckpt_name");
+                    result.ModelName ??= GetInputScalar(inputs, "ckpt_name") ?? GetInputScalar(inputs, "model_name") ?? GetInputScalar(inputs, "unet_name");
                 }
                 else if (classType.Contains("Lora", StringComparison.OrdinalIgnoreCase))
                 {
@@ -80,6 +86,11 @@ public sealed class ComfyWorkflowParser
                 else if (classType.Contains("VAE", StringComparison.OrdinalIgnoreCase) && classType.Contains("Loader", StringComparison.OrdinalIgnoreCase))
                 {
                     result.VaeName ??= GetInputScalar(inputs, "vae_name");
+                }
+                else if (classType.Contains("Empty", StringComparison.OrdinalIgnoreCase) && classType.Contains("Latent", StringComparison.OrdinalIgnoreCase))
+                {
+                    result.WorkflowWidth ??= GetInputScalar(inputs, "width");
+                    result.WorkflowHeight ??= GetInputScalar(inputs, "height");
                 }
                 else if (!IsExpectedClass(classType))
                 {
@@ -113,6 +124,7 @@ public sealed class ComfyWorkflowParser
                 _ => "標準ComfyUI経路から生成情報を取得しました。"
             };
             result.ValueSource = "ComfyUI prompt JSON";
+            SetSourcesForParsedValues(result, result.ValueSource);
             return result;
         }
         catch (JsonException exception)
@@ -166,7 +178,9 @@ public sealed class ComfyWorkflowParser
                     result.Sampler ??= GetWidgetScalar(node, 4);
                     result.Scheduler ??= GetWidgetScalar(node, 5);
                 }
-                else if (type.Contains("CheckpointLoader", StringComparison.OrdinalIgnoreCase))
+                else if (type.Contains("CheckpointLoader", StringComparison.OrdinalIgnoreCase) ||
+                         type.Contains("UNETLoader", StringComparison.OrdinalIgnoreCase) ||
+                         type.Contains("ModelLoader", StringComparison.OrdinalIgnoreCase))
                 {
                     result.ModelName ??= GetWidgetScalar(node, 0);
                 }
@@ -178,6 +192,11 @@ public sealed class ComfyWorkflowParser
                 else if (type.Contains("VAE", StringComparison.OrdinalIgnoreCase) && type.Contains("Loader", StringComparison.OrdinalIgnoreCase))
                 {
                     result.VaeName ??= GetWidgetScalar(node, 0);
+                }
+                else if (type.Contains("Empty", StringComparison.OrdinalIgnoreCase) && type.Contains("Latent", StringComparison.OrdinalIgnoreCase))
+                {
+                    result.WorkflowWidth ??= GetWidgetScalar(node, 0);
+                    result.WorkflowHeight ??= GetWidgetScalar(node, 1);
                 }
                 else if (!IsExpectedClass(type))
                 {
@@ -202,6 +221,7 @@ public sealed class ComfyWorkflowParser
             result.Message = hasCoreValues
                 ? "workflow JSONから標準UI構成の値を暫定的に導出しました。"
                 : "workflow JSONは保持しましたが、標準UI構成として導出できる値がありません。";
+            SetSourcesForParsedValues(result, result.ValueSource);
             return result;
         }
         catch (JsonException exception)
@@ -216,10 +236,43 @@ public sealed class ComfyWorkflowParser
 
     private static bool IsExpectedClass(string classType) =>
         classType.Contains("SaveImage", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("PreviewImage", StringComparison.OrdinalIgnoreCase) ||
         classType.Contains("VAEDecode", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("VAEEncode", StringComparison.OrdinalIgnoreCase) ||
         classType.Contains("EmptyLatent", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("LoadLatent", StringComparison.OrdinalIgnoreCase) ||
         classType.Contains("CLIPLoader", StringComparison.OrdinalIgnoreCase) ||
-        classType.Contains("LoadImage", StringComparison.OrdinalIgnoreCase);
+        classType.Contains("DualCLIPLoader", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("UNETLoader", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("LoadImage", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("Reroute", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("ImageScale", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("LatentUpscale", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("UpscaleModel", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("CLIPVision", StringComparison.OrdinalIgnoreCase) ||
+        classType.StartsWith("Conditioning", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("ModelSampling", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("KSamplerSelect", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("RandomNoise", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("BasicScheduler", StringComparison.OrdinalIgnoreCase) ||
+        classType.Contains("SamplerCustom", StringComparison.OrdinalIgnoreCase);
+
+    private static void SetSourcesForParsedValues(ParsedGeneration result, string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return;
+        if (!string.IsNullOrWhiteSpace(result.PositivePrompt)) result.SetSource("positive_prompt", source);
+        if (!string.IsNullOrWhiteSpace(result.NegativePrompt)) result.SetSource("negative_prompt", source);
+        if (!string.IsNullOrWhiteSpace(result.ModelName)) result.SetSource("model_name", source);
+        if (!string.IsNullOrWhiteSpace(result.VaeName)) result.SetSource("vae_name", source);
+        if (!string.IsNullOrWhiteSpace(result.Seed)) result.SetSource("seed", source);
+        if (!string.IsNullOrWhiteSpace(result.Steps)) result.SetSource("steps", source);
+        if (!string.IsNullOrWhiteSpace(result.Cfg)) result.SetSource("cfg", source);
+        if (!string.IsNullOrWhiteSpace(result.Sampler)) result.SetSource("sampler", source);
+        if (!string.IsNullOrWhiteSpace(result.Scheduler)) result.SetSource("scheduler", source);
+        if (!string.IsNullOrWhiteSpace(result.WorkflowWidth)) result.SetSource("workflow_width", source);
+        if (!string.IsNullOrWhiteSpace(result.WorkflowHeight)) result.SetSource("workflow_height", source);
+        if (result.Loras.Count > 0) result.SetSource("loras", source);
+    }
 
     private static JsonElement GetInputs(JsonElement node) =>
         node.TryGetProperty("inputs", out var inputs) && inputs.ValueKind == JsonValueKind.Object ? inputs : default;

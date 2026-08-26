@@ -31,7 +31,8 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="56" />
-            <RowDefinition Height="76" />
+            <RowDefinition Height="124" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
         <Border Grid.Row="0" Background="#20252E" Padding="16,10">
@@ -39,14 +40,19 @@
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
                     <TextBlock Text="PROMPTARIUM" FontWeight="Bold" FontSize="20" VerticalAlignment="Center" Margin="0,0,22,0" Foreground="{StaticResource AccentBrush}" />
                     <Button Content="フォルダを追加" Click="AddFolder_Click" />
+                    <Button Content="フォルダ管理" Click="ToggleScanRoots_Click" />
                     <Button Content="全て再スキャン" Click="ScanAll_Click" />
+                    <Button Content="完全再解析" Click="ForceRescan_Click" />
+                    <Button Content="中止" Click="CancelScan_Click" />
                     <Button Content="バックアップ" Click="Backup_Click" />
                     <Button Content="復元" Click="Restore_Click" />
+                    <Button Content="診断ログ" Click="ShowDiagnostics_Click" />
                 </StackPanel>
                 <TextBlock x:Name="StatusTextBlock" DockPanel.Dock="Right" VerticalAlignment="Center" Foreground="#BAC4D6" Text="準備中" />
             </DockPanel>
         </Border>
-        <Border Grid.Row="1" Background="#1B2028" Padding="16,10,16,8" BorderBrush="#313948" BorderThickness="0,0,0,1">
+        <Border Grid.Row="1" Background="#1B2028" Padding="16,8" BorderBrush="#313948" BorderThickness="0,0,0,1">
+            <StackPanel>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
@@ -54,12 +60,25 @@
                 <StackPanel Grid.Column="0" Margin="0,0,12,0"><TextBlock Text="検索" Foreground="#AAB4C5" FontSize="11" /><TextBox x:Name="SearchTextBox" TextChanged="FilterChanged" /></StackPanel>
                 <StackPanel Grid.Column="1" Margin="0,0,12,0"><TextBlock Text="モデル" Foreground="#AAB4C5" FontSize="11" /><ComboBox x:Name="ModelComboBox" SelectionChanged="FilterChanged" /></StackPanel>
                 <StackPanel Grid.Column="2" Margin="0,0,12,0"><TextBlock Text="LoRA" Foreground="#AAB4C5" FontSize="11" /><ComboBox x:Name="LoraComboBox" SelectionChanged="FilterChanged" /></StackPanel>
-                <StackPanel Grid.Column="3" Margin="0,0,12,0"><TextBlock Text="タグ" Foreground="#AAB4C5" FontSize="11" /><TextBox x:Name="TagTextBox" TextChanged="FilterChanged" /></StackPanel>
+                <StackPanel Grid.Column="3" Margin="0,0,12,0"><TextBlock Text="タグ（候補）" Foreground="#AAB4C5" FontSize="11" /><ComboBox x:Name="TagComboBox" IsEditable="True" IsTextSearchEnabled="False" SelectionChanged="FilterChanged" KeyUp="TagComboBox_KeyUp" /></StackPanel>
                 <StackPanel Grid.Column="4" Margin="0,0,12,0"><TextBlock Text="カテゴリ" Foreground="#AAB4C5" FontSize="11" /><ComboBox x:Name="CategoryComboBox" SelectionChanged="FilterChanged" /></StackPanel>
                 <StackPanel Grid.Column="5" VerticalAlignment="Bottom" Orientation="Horizontal"><CheckBox x:Name="FavoritesOnlyCheckBox" Content="★のみ" VerticalAlignment="Center" Margin="0,0,12,5" Checked="FilterChanged" Unchecked="FilterChanged" /><Button Content="クリア" Click="ClearFilters_Click" /></StackPanel>
             </Grid>
+            <WrapPanel Margin="0,8,0,0">
+                <TextBlock Text="解析状態" Foreground="#AAB4C5" VerticalAlignment="Center" Margin="0,0,5,0" /><ComboBox x:Name="ParseStatusComboBox" Width="125" SelectionChanged="FilterChanged"><ComboBoxItem Content="すべて" /><ComboBoxItem Content="解析済み" /><ComboBoxItem Content="一部解析" /><ComboBoxItem Content="未知ノード" /><ComboBoxItem Content="生成情報なし" /><ComboBoxItem Content="メタデータ破損" /><ComboBoxItem Content="解析不能" /></ComboBox>
+                <TextBlock Text="評価" Foreground="#AAB4C5" VerticalAlignment="Center" Margin="10,0,5,0" /><ComboBox x:Name="MinimumRatingComboBox" Width="100" SelectionChanged="FilterChanged"><ComboBoxItem Content="指定なし" /><ComboBoxItem Content="★以上" /><ComboBoxItem Content="★★以上" /><ComboBoxItem Content="★★★以上" /><ComboBoxItem Content="★★★★以上" /><ComboBoxItem Content="★★★★★" /></ComboBox>
+                <TextBlock Text="最小サイズ" Foreground="#AAB4C5" VerticalAlignment="Center" Margin="10,0,5,0" /><TextBox x:Name="MinimumWidthTextBox" Width="70" TextChanged="FilterChanged" /><TextBlock Text="×" VerticalAlignment="Center" Margin="4,0" /><TextBox x:Name="MinimumHeightTextBox" Width="70" TextChanged="FilterChanged" />
+                <TextBlock Text="最近" Foreground="#AAB4C5" VerticalAlignment="Center" Margin="10,0,5,0" /><ComboBox x:Name="RecentSearchComboBox" Width="180" SelectionChanged="RecentSearchChanged" />
+            </WrapPanel>
+            </StackPanel>
         </Border>
-        <Grid Grid.Row="2">
+        <Border x:Name="ScanRootsPanel" Grid.Row="2" Visibility="Collapsed" Background="#20252E" Padding="16,8" BorderBrush="#313948" BorderThickness="0,0,0,1">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right"><Button Content="選択をスキャン" Click="ScanSelectedRoot_Click" /><Button Content="有効／無効" Click="ToggleSelectedRoot_Click" /><Button Content="削除" Click="DeleteSelectedRoot_Click" /></StackPanel>
+                <ListBox x:Name="ScanRootsListBox" DisplayMemberPath="DisplayName" Background="#11151B" Foreground="#E8EAF0" Height="66" />
+            </DockPanel>
+        </Border>
+        <Grid Grid.Row="3">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="420" /></Grid.ColumnDefinitions>
             <Grid Grid.Column="0" Margin="14">
                 <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="38" /></Grid.RowDefinitions>
