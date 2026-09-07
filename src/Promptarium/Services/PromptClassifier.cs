@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Promptarium.Models;
 
@@ -38,7 +39,7 @@ public sealed class PromptClassifier
 
     private static IEnumerable<string> Split(string prompt)
     {
-        var current = new List<char>();
+        var current = new StringBuilder();
         var depth = 0;
         foreach (var character in prompt)
         {
@@ -46,17 +47,17 @@ public sealed class PromptClassifier
             if (character is ')' or ']' or '}') depth = Math.Max(0, depth - 1);
             if (character == ',' && depth == 0)
             {
-                var token = new string(current.ToArray()).Trim();
+                var token = current.ToString().Trim();
                 if (!string.IsNullOrWhiteSpace(token)) yield return token;
                 current.Clear();
             }
             else
             {
-                current.Add(character);
+                current.Append(character);
             }
         }
 
-        var last = new string(current.ToArray()).Trim();
+        var last = current.ToString().Trim();
         if (!string.IsNullOrWhiteSpace(last)) yield return last;
     }
 
