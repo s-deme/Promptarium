@@ -12,20 +12,84 @@
             <Setter Property="Background" Value="#303846" />
             <Setter Property="Foreground" Value="#F4F6FB" />
             <Setter Property="BorderBrush" Value="#4A5568" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#40516A" /><Setter Property="BorderBrush" Value="#8CB4FF" /></Trigger>
+                <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="#253144" /></Trigger>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="#292F39" /><Setter Property="Foreground" Value="#9AA5B5" /><Setter Property="BorderBrush" Value="#3D4654" /><Setter Property="Cursor" Value="Arrow" /></Trigger>
+            </Style.Triggers>
         </Style>
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="#11151B" />
             <Setter Property="Foreground" Value="#F4F6FB" />
-            <Setter Property="BorderBrush" Value="#485264" />
+            <Setter Property="BorderBrush" Value="#62728A" />
             <Setter Property="Padding" Value="7,5" />
+            <Setter Property="CaretBrush" Value="#FFFFFF" />
+            <Setter Property="SelectionBrush" Value="#315E9E" />
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderBrush" Value="#8CB4FF" /></Trigger>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="#242A33" /><Setter Property="Foreground" Value="#AAB4C5" /><Setter Property="BorderBrush" Value="#3D4654" /></Trigger>
+            </Style.Triggers>
         </Style>
         <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#11151B" />
+            <Setter Property="Background" Value="#F8FAFC" />
+            <Setter Property="Foreground" Value="#172033" />
+            <Setter Property="BorderBrush" Value="#728199" />
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ComboBoxItem">
+                        <Setter Property="Background" Value="#FFFFFF" />
+                        <Setter Property="Foreground" Value="#172033" />
+                        <Setter Property="Padding" Value="8,5" />
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#DDEBFF" /><Setter Property="Foreground" Value="#172033" /></Trigger>
+                            <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#245DB8" /><Setter Property="Foreground" Value="#FFFFFF" /></Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="#EEF1F5" /><Setter Property="Foreground" Value="#687386" /></Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderBrush" Value="#8CB4FF" /></Trigger>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="#DDE2E9" /><Setter Property="Foreground" Value="#586579" /><Setter Property="BorderBrush" Value="#9AA5B5" /></Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="CheckBox">
             <Setter Property="Foreground" Value="#F4F6FB" />
-            <Setter Property="BorderBrush" Value="#485264" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="#9AA5B5" /></Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Foreground" Value="#E8EAF0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="5,3" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#303B4C" /></Trigger>
+                <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#245DB8" /><Setter Property="Foreground" Value="#FFFFFF" /></Trigger>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="#9AA5B5" /></Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#303846" />
+            <Setter Property="Foreground" Value="#F4F6FB" />
+            <Setter Property="BorderBrush" Value="#56647A" />
+            <Setter Property="Padding" Value="7,5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="Foreground" Value="#E8EAF0" />
+            <Setter Property="BorderBrush" Value="#384354" />
+            <Setter Property="Padding" Value="4,2" />
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#245DB8" /><Setter Property="Foreground" Value="#FFFFFF" /></Trigger>
+            </Style.Triggers>
         </Style>
         <Style TargetType="Expander">
             <Setter Property="Margin" Value="0,8,0,0" />
+            <Setter Property="Foreground" Value="#F4F6FB" />
         </Style>
     </Window.Resources>
     <Grid>
@@ -102,30 +166,85 @@
             <Border Grid.Column="1" Background="{StaticResource PanelBrush}" BorderBrush="#313948" BorderThickness="1,0,0,0" Padding="14">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <TextBlock Text="画像詳細" FontSize="18" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
-                        <Border Height="250" Background="#10141A" Margin="0,10,0,8" CornerRadius="4"><Image x:Name="DetailImage" Stretch="Uniform" /></Border>
-                        <TextBlock x:Name="DetailPathTextBlock" Foreground="#AAB4C5" TextWrapping="Wrap" FontSize="11" />
-                        <TextBlock x:Name="ParseStatusTextBlock" Margin="0,5,0,0" FontWeight="SemiBold" /><TextBlock x:Name="ParseMessageTextBlock" Foreground="#AAB4C5" TextWrapping="Wrap" FontSize="11" />
+                        <TextBlock Text="モデル／LoRA" FontSize="18" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Text="モデル" Margin="0,10,0,2" FontSize="11" Foreground="#AAB4C5" />
+                        <DockPanel LastChildFill="True">
+                            <Button x:Name="EditModelButton" Content="手動入力" Click="EditModel_Click" DockPanel.Dock="Right" Margin="8,0,0,0" />
+                            <TextBlock x:Name="ModelValueTextBlock" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            <TextBox x:Name="ModelTextBox" Visibility="Collapsed" />
+                        </DockPanel>
+                        <TextBlock x:Name="ModelSourceTextBlock" Foreground="#AAB4C5" FontSize="11" />
+                        <TextBlock Text="LoRA" Margin="0,8,0,2" FontSize="11" Foreground="#AAB4C5" />
+                        <TextBlock x:Name="LoraValueTextBlock" TextWrapping="Wrap" />
+                        <TextBlock x:Name="LoraSourceTextBlock" Foreground="#AAB4C5" FontSize="11" />
+
+                        <TextBlock Text="ポジティブプロンプト（カテゴリ別）" Margin="0,14,0,2" FontSize="16" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Text="保存済みタグをカテゴリごとに、元の入力順で表示します。" Foreground="#AAB4C5" FontSize="11" TextWrapping="Wrap" />
+                        <StackPanel Margin="0,6,0,0">
+                            <DockPanel LastChildFill="True"><Button Content="コピー" Tag="キャラクター" Click="CopyPositiveCategory_Click" DockPanel.Dock="Right" Margin="8,0,0,0" /><TextBlock Text="キャラクター" VerticalAlignment="Center" /></DockPanel>
+                            <TextBox x:Name="CharacterPromptTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="38" MaxHeight="80" VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                        <StackPanel Margin="0,6,0,0">
+                            <DockPanel LastChildFill="True"><Button Content="コピー" Tag="ポーズ／行動" Click="CopyPositiveCategory_Click" DockPanel.Dock="Right" Margin="8,0,0,0" /><TextBlock Text="ポーズ／行動" VerticalAlignment="Center" /></DockPanel>
+                            <TextBox x:Name="PosePromptTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="38" MaxHeight="80" VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                        <StackPanel Margin="0,6,0,0">
+                            <DockPanel LastChildFill="True"><Button Content="コピー" Tag="シチュエーション／環境" Click="CopyPositiveCategory_Click" DockPanel.Dock="Right" Margin="8,0,0,0" /><TextBlock Text="シチュエーション／環境" VerticalAlignment="Center" /></DockPanel>
+                            <TextBox x:Name="EnvironmentPromptTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="38" MaxHeight="80" VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                        <StackPanel Margin="0,6,0,0">
+                            <DockPanel LastChildFill="True"><Button Content="コピー" Tag="スタイル／品質" Click="CopyPositiveCategory_Click" DockPanel.Dock="Right" Margin="8,0,0,0" /><TextBlock Text="スタイル／品質" VerticalAlignment="Center" /></DockPanel>
+                            <TextBox x:Name="StylePromptTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="38" MaxHeight="80" VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                        <StackPanel Margin="0,6,0,0">
+                            <DockPanel LastChildFill="True"><Button Content="コピー" Tag="構図／カメラ" Click="CopyPositiveCategory_Click" DockPanel.Dock="Right" Margin="8,0,0,0" /><TextBlock Text="構図／カメラ" VerticalAlignment="Center" /></DockPanel>
+                            <TextBox x:Name="CompositionPromptTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="38" MaxHeight="80" VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                        <StackPanel Margin="0,6,0,0">
+                            <DockPanel LastChildFill="True"><Button Content="コピー" Tag="未分類" Click="CopyPositiveCategory_Click" DockPanel.Dock="Right" Margin="8,0,0,0" /><TextBlock Text="未分類" VerticalAlignment="Center" /></DockPanel>
+                            <TextBox x:Name="UncategorizedPromptTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="38" MaxHeight="80" VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                        <Expander Header="元のポジティブプロンプト（手動補足）" Margin="0,10,0,0">
+                            <StackPanel>
+                                <TextBox x:Name="PositiveTextBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="72" VerticalScrollBarVisibility="Auto" />
+                                <TextBlock x:Name="PositiveSourceTextBlock" Foreground="#AAB4C5" FontSize="11" />
+                                <Button Content="全文をコピー" Click="CopyPositive_Click" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Expander>
+                        <StackPanel Margin="0,10,0,0">
+                            <DockPanel LastChildFill="True"><Button Content="コピー" Click="CopyNegative_Click" DockPanel.Dock="Right" Margin="8,0,0,0" /><TextBlock Text="ネガティブプロンプト" VerticalAlignment="Center" FontSize="16" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" /></DockPanel>
+                            <TextBox x:Name="NegativeTextBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="54" VerticalScrollBarVisibility="Auto" />
+                            <TextBlock x:Name="NegativeSourceTextBlock" Foreground="#AAB4C5" FontSize="11" />
+                        </StackPanel>
+
+                        <TextBlock Text="タグ分類（カテゴリ列は直接編集できます）" Margin="0,14,0,4" FontSize="16" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                        <DataGrid x:Name="TagsGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" Height="200" Background="#151A21" Foreground="#E8EAF0" RowBackground="#1E2530" AlternatingRowBackground="#1A2029"><DataGrid.Columns><DataGridTextColumn Header="タグ" Binding="{Binding RawText}" Width="2*" IsReadOnly="True" /><DataGridTemplateColumn Header="カテゴリ" Width="*"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding DataContext.TagCategories, RelativeSource={RelativeSource AncestorType=Window}}" SelectedItem="{Binding Category, UpdateSourceTrigger=PropertyChanged}" SelectionChanged="TagCategory_SelectionChanged" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn><DataGridTextColumn Header="種別" Binding="{Binding PromptKind}" Width="80" IsReadOnly="True" /></DataGrid.Columns></DataGrid>
                         <WrapPanel Margin="0,10,0,0"><CheckBox x:Name="FavoriteCheckBox" Content="お気に入り" Margin="0,0,18,0" /><TextBlock Text="評価" VerticalAlignment="Center" Margin="0,0,6,0" /><ComboBox x:Name="RatingComboBox" Width="105"><ComboBoxItem Content="未評価" /><ComboBoxItem Content="★" /><ComboBoxItem Content="★★" /><ComboBoxItem Content="★★★" /><ComboBoxItem Content="★★★★" /><ComboBoxItem Content="★★★★★" /></ComboBox></WrapPanel>
-                        <TextBlock Text="ポジティブプロンプト" Margin="0,12,0,2" /><TextBox x:Name="PositiveTextBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="72" VerticalScrollBarVisibility="Auto" /><TextBlock x:Name="PositiveSourceTextBlock" Foreground="#AAB4C5" FontSize="11" />
-                        <TextBlock Text="ネガティブプロンプト" Margin="0,10,0,2" /><TextBox x:Name="NegativeTextBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="54" VerticalScrollBarVisibility="Auto" /><TextBlock x:Name="NegativeSourceTextBlock" Foreground="#AAB4C5" FontSize="11" />
-                        <TextBlock Text="モデル" Margin="0,10,0,2" /><TextBox x:Name="ModelTextBox" /><TextBlock x:Name="GenerationInfoTextBlock" Foreground="#AAB4C5" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11" />
-                        <TextBlock Text="生成パラメータ（手動補足）" Margin="0,10,0,3" />
-                        <UniformGrid Columns="2" Margin="0,0,0,2">
-                            <StackPanel Margin="0,0,6,4"><TextBlock Text="VAE" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="VaeTextBox" /></StackPanel>
-                            <StackPanel Margin="6,0,0,4"><TextBlock Text="Seed" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="SeedTextBox" /></StackPanel>
-                            <StackPanel Margin="0,0,6,4"><TextBlock Text="Steps" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="StepsTextBox" /></StackPanel>
-                            <StackPanel Margin="6,0,0,4"><TextBlock Text="CFG" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="CfgTextBox" /></StackPanel>
-                            <StackPanel Margin="0,0,6,4"><TextBlock Text="Sampler" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="SamplerTextBox" /></StackPanel>
-                            <StackPanel Margin="6,0,0,4"><TextBlock Text="Scheduler" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="SchedulerTextBox" /></StackPanel>
-                            <StackPanel Margin="0,0,6,0"><TextBlock Text="生成サイズ（幅）" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="WidthTextBox" /></StackPanel>
-                            <StackPanel Margin="6,0,0,0"><TextBlock Text="生成サイズ（高さ）" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="HeightTextBox" /></StackPanel>
-                        </UniformGrid>
-                        <TextBlock x:Name="GenerationSourceTextBlock" Foreground="#AAB4C5" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,0" />
-                        <TextBlock Text="タグ分類（カテゴリ列は直接編集できます）" Margin="0,12,0,4" />
-                        <DataGrid x:Name="TagsGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" Height="200" Background="#151A21" Foreground="#E8EAF0" RowBackground="#1E2530" AlternatingRowBackground="#1A2029"><DataGrid.Columns><DataGridTextColumn Header="タグ" Binding="{Binding RawText}" Width="2*" IsReadOnly="True" /><DataGridTemplateColumn Header="カテゴリ" Width="*"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding DataContext.TagCategories, RelativeSource={RelativeSource AncestorType=Window}}" SelectedItem="{Binding Category, UpdateSourceTrigger=PropertyChanged}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn><DataGridTextColumn Header="種別" Binding="{Binding PromptKind}" Width="80" IsReadOnly="True" /></DataGrid.Columns></DataGrid>
                         <TextBlock Text="メモ" Margin="0,12,0,2" /><TextBox x:Name="NoteTextBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="70" VerticalScrollBarVisibility="Auto" />
-                        <WrapPanel Margin="0,10,0,0"><Button Content="変更を保存" Click="SaveEdits_Click" /><Button Content="正をコピー" Click="CopyPositive_Click" /><Button Content="負をコピー" Click="CopyNegative_Click" /><ComboBox x:Name="CopyCategoryComboBox" Width="150" Margin="0,0,8,0" /><Button Content="カテゴリをコピー" Click="CopyCategory_Click" /><Button Content="Workflow JSONを書出し" Click="ExportWorkflow_Click" /><Button Content="場所を開く" Click="OpenLocation_Click" /></WrapPanel>
+                        <WrapPanel Margin="0,10,0,0"><Button Content="変更を保存" Click="SaveEdits_Click" /><Button Content="Workflow JSONを書出し" Click="ExportWorkflow_Click" /><Button Content="場所を開く" Click="OpenLocation_Click" /></WrapPanel>
+                        <Expander Header="生成パラメータ（手動補足）" Margin="0,10,0,0">
+                            <StackPanel>
+                                <TextBlock x:Name="GenerationInfoTextBlock" Foreground="#AAB4C5" TextWrapping="Wrap" Margin="0,0,0,6" FontSize="11" />
+                                <UniformGrid Columns="2" Margin="0,0,0,2">
+                                    <StackPanel Margin="0,0,6,4"><TextBlock Text="VAE" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="VaeTextBox" /></StackPanel>
+                                    <StackPanel Margin="6,0,0,4"><TextBlock Text="Seed" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="SeedTextBox" /></StackPanel>
+                                    <StackPanel Margin="0,0,6,4"><TextBlock Text="Steps" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="StepsTextBox" /></StackPanel>
+                                    <StackPanel Margin="6,0,0,4"><TextBlock Text="CFG" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="CfgTextBox" /></StackPanel>
+                                    <StackPanel Margin="0,0,6,4"><TextBlock Text="Sampler" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="SamplerTextBox" /></StackPanel>
+                                    <StackPanel Margin="6,0,0,4"><TextBlock Text="Scheduler" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="SchedulerTextBox" /></StackPanel>
+                                    <StackPanel Margin="0,0,6,0"><TextBlock Text="生成サイズ（幅）" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="WidthTextBox" /></StackPanel>
+                                    <StackPanel Margin="6,0,0,0"><TextBlock Text="生成サイズ（高さ）" FontSize="11" Foreground="#AAB4C5" /><TextBox x:Name="HeightTextBox" /></StackPanel>
+                                </UniformGrid>
+                                <TextBlock x:Name="GenerationSourceTextBlock" Foreground="#AAB4C5" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,0" />
+                            </StackPanel>
+                        </Expander>
+                        <Expander Header="画像・解析情報" Margin="0,10,0,0">
+                            <StackPanel>
+                                <TextBlock x:Name="DetailPathTextBlock" Foreground="#AAB4C5" TextWrapping="Wrap" FontSize="11" />
+                                <TextBlock x:Name="ParseStatusTextBlock" Margin="0,5,0,0" FontWeight="SemiBold" />
+                                <TextBlock x:Name="ParseMessageTextBlock" Foreground="#AAB4C5" TextWrapping="Wrap" FontSize="11" />
+                            </StackPanel>
+                        </Expander>
                         <Expander Header="保存場所"><ListBox x:Name="LocationsListBox" Background="#11151B" Foreground="#E8EAF0" MaxHeight="130" /></Expander>
                         <Expander Header="抽出メタデータ（raw）"><TextBox x:Name="RawMetadataTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MinHeight="100" /></Expander>
                         <Expander Header="ComfyUI prompt JSON"><TextBox x:Name="PromptJsonTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" MinHeight="100" /></Expander>

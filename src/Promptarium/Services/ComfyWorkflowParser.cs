@@ -35,22 +35,23 @@ public sealed class ComfyWorkflowParser
 
             var nodes = document.RootElement.EnumerateObject()
                 .ToDictionary(node => node.Name, node => node.Value, StringComparer.Ordinal);
+            var outputPathNodes = FindPromptOutputPathNodes(nodes);
+            if (outputPathNodes.Count == 0)
+            {
+                return CreateNoOutputPathResult("ComfyUI prompt JSON");
+            }
             var result = new ParsedGeneration();
             var textNodes = new Dictionary<string, string>(StringComparer.Ordinal);
             JsonElement? samplerNode = null;
             var unknownNodeCount = 0;
 
-            foreach (var (nodeId, node) in nodes)
+            foreach (var (nodeId, node) in nodes.Where(pair => outputPathNodes.Contains(pair.Key)))
             {
                 var classType = GetString(node, "class_type") ?? string.Empty;
                 var inputs = GetInputs(node);
                 if (classType.Contains("CLIPTextEncode", StringComparison.OrdinalIgnoreCase))
                 {
-                    var text = GetInputString(inputs, "text")
-                               ?? GetInputString(inputs, "t5xxl")
-                               ?? GetInputString(inputs, "clip_l")
-                               ?? GetInputString(inputs, "text_g")
-                               ?? GetInputString(inputs, "text_l");
+                    var text = GetPromptText(inputs);
                     if (!string.IsNullOrWhiteSpace(text))
                     {
                         textNodes[nodeId] = text;
@@ -101,11 +102,11 @@ public sealed class ComfyWorkflowParser
             if (samplerNode is { } sampler)
             {
                 var samplerInputs = GetInputs(sampler);
-                result.PositivePrompt = ResolveTextInput(samplerInputs, "positive", textNodes);
-                result.NegativePrompt = ResolveTextInput(samplerInputs, "negative", textNodes);
+                result.PositivePrompt = ResolvePromptConditioningText(samplerInputs, "positive", nodes);
+                result.NegativePrompt = ResolvePromptConditioningText(samplerInputs, "negative", nodes);
             }
 
-            if (string.IsNullOrWhiteSpace(result.PositivePrompt) && textNodes.Count > 0)
+            if (samplerNode is null && string.IsNullOrWhiteSpace(result.PositivePrompt) && textNodes.Count > 0)
             {
                 result.PositivePrompt = textNodes.Values.First();
                 result.NegativePrompt ??= textNodes.Values.Skip(1).FirstOrDefault();
@@ -156,12 +157,17 @@ public sealed class ComfyWorkflowParser
                 .Where(node => GetNodeId(node) is not null)
                 .ToDictionary(node => GetNodeId(node)!.Value, node => node);
             var linkOrigins = ReadLinkOrigins(document.RootElement);
+            var outputPathNodes = FindWorkflowOutputPathNodes(nodes, linkOrigins);
+            if (outputPathNodes.Count == 0)
+            {
+                return CreateNoOutputPathResult("ComfyUI workflow JSON（UIワークフロー由来）");
+            }
             var textNodes = new Dictionary<int, string>();
             var result = new ParsedGeneration { ValueSource = "ComfyUI workflow JSON（UIワークフロー由来）" };
             JsonElement? sampler = null;
             var unknownNodeCount = 0;
 
-            foreach (var (nodeId, node) in nodes)
+            foreach (var (nodeId, node) in nodes.Where(pair => outputPathNodes.Contains(pair.Key)))
             {
                 var type = GetString(node, "type") ?? string.Empty;
                 if (type.Contains("CLIPTextEncode", StringComparison.OrdinalIgnoreCase))
@@ -206,11 +212,11 @@ public sealed class ComfyWorkflowParser
 
             if (sampler is { } samplerNode)
             {
-                result.PositivePrompt = ResolveWorkflowTextInput(samplerNode, "positive", linkOrigins, textNodes);
-                result.NegativePrompt = ResolveWorkflowTextInput(samplerNode, "negative", linkOrigins, textNodes);
+                result.PositivePrompt = ResolveWorkflowConditioningText(samplerNode, "positive", linkOrigins, nodes);
+                result.NegativePrompt = ResolveWorkflowConditioningText(samplerNode, "negative", linkOrigins, nodes);
             }
 
-            if (string.IsNullOrWhiteSpace(result.PositivePrompt) && textNodes.Count > 0)
+            if (sampler is null && string.IsNullOrWhiteSpace(result.PositivePrompt) && textNodes.Count > 0)
             {
                 result.PositivePrompt = textNodes.Values.First();
                 result.NegativePrompt ??= textNodes.Values.Skip(1).FirstOrDefault();
@@ -257,6 +263,85 @@ public sealed class ComfyWorkflowParser
         classType.Contains("BasicScheduler", StringComparison.OrdinalIgnoreCase) ||
         classType.Contains("SamplerCustom", StringComparison.OrdinalIgnoreCase);
 
+    private static ParsedGeneration CreateNoOutputPathResult(string source) => new()
+    {
+        Status = ParseStatus.Partial,
+        ValueSource = source,
+        Message = "SaveImage／PreviewImage などの画像出力ノードへ接続された経路を確認できないため、未接続ノードの値は抽出しません。"
+    };
+
+    private static HashSet<string> FindPromptOutputPathNodes(IReadOnlyDictionary<string, JsonElement> nodes)
+    {
+        var outputNodes = nodes
+            .Where(pair => IsImageOutputNode(GetString(pair.Value, "class_type")))
+            .Select(pair => pair.Key);
+        var connected = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<string>(outputNodes);
+        while (pending.TryPop(out var nodeId))
+        {
+            if (!nodes.TryGetValue(nodeId, out var node) || !connected.Add(nodeId)) continue;
+            foreach (var upstreamNodeId in GetPromptInputLinks(GetInputs(node)))
+            {
+                if (nodes.ContainsKey(upstreamNodeId)) pending.Push(upstreamNodeId);
+            }
+        }
+
+        return connected;
+    }
+
+    private static HashSet<int> FindWorkflowOutputPathNodes(IReadOnlyDictionary<int, JsonElement> nodes, IReadOnlyDictionary<int, int> linkOrigins)
+    {
+        var outputNodes = nodes
+            .Where(pair => IsImageOutputNode(GetString(pair.Value, "type")))
+            .Select(pair => pair.Key);
+        var connected = new HashSet<int>();
+        var pending = new Stack<int>(outputNodes);
+        while (pending.TryPop(out var nodeId))
+        {
+            if (!nodes.TryGetValue(nodeId, out var node) || !connected.Add(nodeId)) continue;
+            foreach (var upstreamNodeId in GetWorkflowInputLinks(node, linkOrigins))
+            {
+                if (nodes.ContainsKey(upstreamNodeId)) pending.Push(upstreamNodeId);
+            }
+        }
+
+        return connected;
+    }
+
+    private static bool IsImageOutputNode(string? classType) =>
+        !string.IsNullOrWhiteSpace(classType) &&
+        (classType.Contains("SaveImage", StringComparison.OrdinalIgnoreCase) ||
+         classType.Contains("PreviewImage", StringComparison.OrdinalIgnoreCase) ||
+         classType.Contains("SaveAnimated", StringComparison.OrdinalIgnoreCase) ||
+         classType.Contains("SaveVideo", StringComparison.OrdinalIgnoreCase));
+
+    private static IEnumerable<string> GetPromptInputLinks(JsonElement inputs)
+    {
+        if (inputs.ValueKind != JsonValueKind.Object) yield break;
+        foreach (var input in inputs.EnumerateObject())
+        {
+            if (input.Value.ValueKind != JsonValueKind.Array) continue;
+            var values = input.Value.EnumerateArray().ToArray();
+            if (values.Length >= 2 && values[0].ValueKind == JsonValueKind.String && values[1].ValueKind == JsonValueKind.Number)
+            {
+                var nodeId = values[0].GetString();
+                if (!string.IsNullOrWhiteSpace(nodeId)) yield return nodeId;
+            }
+        }
+    }
+
+    private static IEnumerable<int> GetWorkflowInputLinks(JsonElement node, IReadOnlyDictionary<int, int> linkOrigins)
+    {
+        if (!node.TryGetProperty("inputs", out var inputs) || inputs.ValueKind != JsonValueKind.Array) yield break;
+        foreach (var input in inputs.EnumerateArray())
+        {
+            if (input.TryGetProperty("link", out var link) && link.ValueKind == JsonValueKind.Number && link.TryGetInt32(out var linkId) && linkOrigins.TryGetValue(linkId, out var originId))
+            {
+                yield return originId;
+            }
+        }
+    }
+
     private static void SetSourcesForParsedValues(ParsedGeneration result, string? source)
     {
         if (string.IsNullOrWhiteSpace(source)) return;
@@ -302,7 +387,14 @@ public sealed class ComfyWorkflowParser
         };
     }
 
-    private static string? ResolveTextInput(JsonElement inputs, string inputName, IReadOnlyDictionary<string, string> textNodes)
+    private static string? GetPromptText(JsonElement inputs) =>
+        GetInputString(inputs, "text")
+        ?? GetInputString(inputs, "t5xxl")
+        ?? GetInputString(inputs, "clip_l")
+        ?? GetInputString(inputs, "text_g")
+        ?? GetInputString(inputs, "text_l");
+
+    private static string? ResolvePromptConditioningText(JsonElement inputs, string inputName, IReadOnlyDictionary<string, JsonElement> nodes)
     {
         if (inputs.ValueKind != JsonValueKind.Object || !inputs.TryGetProperty(inputName, out var input) || input.ValueKind != JsonValueKind.Array)
         {
@@ -310,10 +402,35 @@ public sealed class ComfyWorkflowParser
         }
 
         var values = input.EnumerateArray().ToArray();
-        return values.Length > 0 && values[0].ValueKind == JsonValueKind.String && textNodes.TryGetValue(values[0].GetString()!, out var text)
-            ? text
-            : null;
+        if (values.Length < 2 || values[0].ValueKind != JsonValueKind.String || values[1].ValueKind != JsonValueKind.Number)
+        {
+            return null;
+        }
+
+        var textParts = new List<string>();
+        CollectPromptConditioningTexts(values[0].GetString(), nodes, new HashSet<string>(StringComparer.Ordinal), textParts);
+        return JoinTextParts(textParts);
     }
+
+    private static void CollectPromptConditioningTexts(string? nodeId, IReadOnlyDictionary<string, JsonElement> nodes, ISet<string> visited, ICollection<string> textParts)
+    {
+        if (string.IsNullOrWhiteSpace(nodeId) || !visited.Add(nodeId) || !nodes.TryGetValue(nodeId, out var node)) return;
+        var classType = GetString(node, "class_type") ?? string.Empty;
+        if (classType.Contains("CLIPTextEncode", StringComparison.OrdinalIgnoreCase))
+        {
+            var text = GetPromptText(GetInputs(node));
+            if (!string.IsNullOrWhiteSpace(text)) textParts.Add(text);
+            return;
+        }
+
+        foreach (var upstreamNodeId in GetPromptInputLinks(GetInputs(node)))
+        {
+            CollectPromptConditioningTexts(upstreamNodeId, nodes, visited, textParts);
+        }
+    }
+
+    private static string? JoinTextParts(IReadOnlyCollection<string> textParts) =>
+        textParts.Count == 0 ? null : string.Join(", ", textParts);
 
     private static int? GetNodeId(JsonElement node) =>
         node.TryGetProperty("id", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var id) ? id : null;
@@ -345,19 +462,39 @@ public sealed class ComfyWorkflowParser
         foreach (var link in linkArray.EnumerateArray())
         {
             var values = link.ValueKind == JsonValueKind.Array ? link.EnumerateArray().ToArray() : [];
-            if (values.Length >= 2 && values[0].TryGetInt32(out var linkId) && values[1].TryGetInt32(out var originId)) links[linkId] = originId;
+            if (values.Length >= 2 && values[0].ValueKind == JsonValueKind.Number && values[1].ValueKind == JsonValueKind.Number && values[0].TryGetInt32(out var linkId) && values[1].TryGetInt32(out var originId)) links[linkId] = originId;
         }
         return links;
     }
 
-    private static string? ResolveWorkflowTextInput(JsonElement node, string inputName, IReadOnlyDictionary<int, int> linkOrigins, IReadOnlyDictionary<int, string> textNodes)
+    private static string? ResolveWorkflowConditioningText(JsonElement node, string inputName, IReadOnlyDictionary<int, int> linkOrigins, IReadOnlyDictionary<int, JsonElement> nodes)
     {
         if (!node.TryGetProperty("inputs", out var inputs) || inputs.ValueKind != JsonValueKind.Array) return null;
         foreach (var input in inputs.EnumerateArray())
         {
-            if (!string.Equals(GetString(input, "name"), inputName, StringComparison.OrdinalIgnoreCase) || !input.TryGetProperty("link", out var link) || !link.TryGetInt32(out var linkId)) continue;
-            return linkOrigins.TryGetValue(linkId, out var nodeId) && textNodes.TryGetValue(nodeId, out var text) ? text : null;
+            if (!string.Equals(GetString(input, "name"), inputName, StringComparison.OrdinalIgnoreCase) || !input.TryGetProperty("link", out var link) || link.ValueKind != JsonValueKind.Number || !link.TryGetInt32(out var linkId)) continue;
+            if (!linkOrigins.TryGetValue(linkId, out var nodeId)) return null;
+            var textParts = new List<string>();
+            CollectWorkflowConditioningTexts(nodeId, nodes, linkOrigins, new HashSet<int>(), textParts);
+            return JoinTextParts(textParts);
         }
         return null;
+    }
+
+    private static void CollectWorkflowConditioningTexts(int nodeId, IReadOnlyDictionary<int, JsonElement> nodes, IReadOnlyDictionary<int, int> linkOrigins, ISet<int> visited, ICollection<string> textParts)
+    {
+        if (!visited.Add(nodeId) || !nodes.TryGetValue(nodeId, out var node)) return;
+        var type = GetString(node, "type") ?? string.Empty;
+        if (type.Contains("CLIPTextEncode", StringComparison.OrdinalIgnoreCase))
+        {
+            var text = GetWidgetScalar(node, 0);
+            if (!string.IsNullOrWhiteSpace(text)) textParts.Add(text);
+            return;
+        }
+
+        foreach (var upstreamNodeId in GetWorkflowInputLinks(node, linkOrigins))
+        {
+            CollectWorkflowConditioningTexts(upstreamNodeId, nodes, linkOrigins, visited, textParts);
+        }
     }
 }

@@ -67,8 +67,9 @@ static async Task RunAsync(string testRoot)
         ["prompt"] = """
             {
               "1":{"class_type":"CLIPTextEncode","inputs":{"text":"unknown node test"}},
-              "2":{"class_type":"KSampler","inputs":{"seed":42,"positive":["1",0]}},
-              "3":{"class_type":"MyCustomNode","inputs":{}}
+              "2":{"class_type":"KSampler","inputs":{"seed":42,"positive":["1",0],"latent_image":["3",0]}},
+              "3":{"class_type":"MyCustomNode","inputs":{}},
+              "4":{"class_type":"SaveImage","inputs":{"images":["2",0]}}
             }
             """
     });
@@ -93,10 +94,12 @@ static async Task RunAsync(string testRoot)
           "nodes": [
             {"id": 1, "type": "CLIPTextEncode", "widgets_values": ["workflow positive"]},
             {"id": 2, "type": "CLIPTextEncode", "widgets_values": ["workflow negative"]},
-            {"id": 3, "type": "KSampler", "widgets_values": [321, "fixed", 24, 6.5, "euler", "normal"], "inputs": [{"name":"positive", "link": 10}, {"name":"negative", "link": 11}]},
-            {"id": 4, "type": "CheckpointLoaderSimple", "widgets_values": ["workflow-model.safetensors"]}
+            {"id": 3, "type": "KSampler", "widgets_values": [321, "fixed", 24, 6.5, "euler", "normal"], "inputs": [{"name":"positive", "link": 10}, {"name":"negative", "link": 11}, {"name":"model", "link": 12}]},
+            {"id": 4, "type": "CheckpointLoaderSimple", "widgets_values": ["workflow-model.safetensors"]},
+            {"id": 5, "type": "VAEDecode", "inputs": [{"name":"samples", "link": 13}]},
+            {"id": 6, "type": "SaveImage", "inputs": [{"name":"images", "link": 14}]}
           ],
-          "links": [[10, 1, 0, 3, 0, "CONDITIONING"], [11, 2, 0, 3, 1, "CONDITIONING"]]
+          "links": [[10, 1, 0, 3, 0, "CONDITIONING"], [11, 2, 0, 3, 1, "CONDITIONING"], [12, 4, 0, 3, 2, "MODEL"], [13, 3, 0, 5, 0, "LATENT"], [14, 5, 0, 6, 0, "IMAGE"]]
         }
         """;
     var workflowParsed = parser.Parse(workflowOnly);

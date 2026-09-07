@@ -46,8 +46,6 @@ public partial class MainWindow : Window
         RatingComboBox.SelectedIndex = 0;
         CategoryComboBox.ItemsSource = new[] { "すべて" }.Concat(PromptClassifier.Categories.Skip(1)).ToList();
         CategoryComboBox.SelectedIndex = 0;
-        CopyCategoryComboBox.ItemsSource = PromptClassifier.Categories;
-        CopyCategoryComboBox.SelectedIndex = 0;
         ParseStatusComboBox.SelectedIndex = 0;
         MinimumRatingComboBox.SelectedIndex = 0;
         TagComboBox.AddHandler(System.Windows.Controls.TextBox.TextChangedEvent, new TextChangedEventHandler(FilterChanged));
@@ -215,7 +213,6 @@ public partial class MainWindow : Window
 
     private void PopulateDetail(ImageDetail detail)
     {
-        DetailImage.Source = ThumbnailLoader.Load(detail.PrimaryPath, 700);
         DetailPathTextBlock.Text = $"{detail.PrimaryPath}\n{detail.Width} × {detail.Height}  /  保存場所 {detail.LocationCount}件";
         ParseStatusTextBlock.Text = $"解析状態: {StatusLabel(detail.ParseStatus)}";
         ParseMessageTextBlock.Text = detail.ParseMessage ?? string.Empty;
@@ -224,6 +221,7 @@ public partial class MainWindow : Window
         PositiveTextBox.Text = detail.ManualPositivePrompt ?? detail.PositivePrompt ?? string.Empty;
         NegativeTextBox.Text = detail.ManualNegativePrompt ?? detail.NegativePrompt ?? string.Empty;
         ModelTextBox.Text = detail.ManualModelName ?? detail.ModelName ?? string.Empty;
+        ShowModelLabel(ModelTextBox.Text);
         var sources = ReadValueSources(detail.ValueSourcesJson);
         var positiveSource = SourceOf(detail.ManualPositivePrompt, "positive_prompt", sources);
         var negativeSource = SourceOf(detail.ManualNegativePrompt, "negative_prompt", sources);
@@ -245,7 +243,10 @@ public partial class MainWindow : Window
             : !string.IsNullOrWhiteSpace(detail.WorkflowHeight) ? SourceOf(null, "workflow_height", sources) : SourceOf(null, "height", sources);
         PositiveSourceTextBlock.Text = $"情報源: {positiveSource}";
         NegativeSourceTextBlock.Text = $"情報源: {negativeSource}";
-        GenerationInfoTextBlock.Text = $"解析値（{detail.ParseSource ?? "解析できませんでした"}）\nモデル: {detail.ManualModelName ?? detail.ModelName ?? "—"} [{modelSource}]\nLoRA: {FormatLoras(detail.LorasJson)} [{loraSource}]\nVAE: {detail.ManualVaeName ?? detail.VaeName ?? "—"} [{vaeSource}]  /  Seed: {detail.ManualSeed ?? detail.Seed ?? "—"} [{seedSource}]\nSteps: {detail.ManualSteps ?? detail.Steps ?? "—"} [{stepsSource}]  /  CFG: {detail.ManualCfg ?? detail.Cfg ?? "—"} [{cfgSource}]\nSampler: {detail.ManualSampler ?? detail.Sampler ?? "—"} [{samplerSource}]  /  Scheduler: {detail.ManualScheduler ?? detail.Scheduler ?? "—"} [{schedulerSource}]\n生成サイズ: {displayedWidth} × {displayedHeight} px [{widthSource} / {heightSource}]\nPNG画像サイズ: {detail.Width} × {detail.Height} px [PNG IHDR]";
+        ModelSourceTextBlock.Text = $"情報源: {modelSource}";
+        LoraValueTextBlock.Text = FormatLoras(detail.LorasJson);
+        LoraSourceTextBlock.Text = $"情報源: {loraSource}";
+        GenerationInfoTextBlock.Text = $"解析値（{detail.ParseSource ?? "解析できませんでした"}）\nVAE: {detail.ManualVaeName ?? detail.VaeName ?? "—"} [{vaeSource}]  /  Seed: {detail.ManualSeed ?? detail.Seed ?? "—"} [{seedSource}]\nSteps: {detail.ManualSteps ?? detail.Steps ?? "—"} [{stepsSource}]  /  CFG: {detail.ManualCfg ?? detail.Cfg ?? "—"} [{cfgSource}]\nSampler: {detail.ManualSampler ?? detail.Sampler ?? "—"} [{samplerSource}]  /  Scheduler: {detail.ManualScheduler ?? detail.Scheduler ?? "—"} [{schedulerSource}]\n生成サイズ: {displayedWidth} × {displayedHeight} px [{widthSource} / {heightSource}]\nPNG画像サイズ: {detail.Width} × {detail.Height} px [PNG IHDR]";
         VaeTextBox.Text = detail.ManualVaeName ?? string.Empty;
         SeedTextBox.Text = detail.ManualSeed ?? string.Empty;
         StepsTextBox.Text = detail.ManualSteps ?? string.Empty;
@@ -264,6 +265,7 @@ public partial class MainWindow : Window
         LocationsListBox.ItemsSource = detail.Locations;
         _tags.Clear();
         foreach (var tag in detail.Tags) _tags.Add(tag);
+        UpdatePositivePromptSections();
     }
 
     private void SaveEdits_Click(object sender, RoutedEventArgs e)
@@ -284,21 +286,67 @@ public partial class MainWindow : Window
             Sampler = SamplerTextBox.Text.Trim(), Scheduler = SchedulerTextBox.Text.Trim(), Width = WidthTextBox.Text.Trim(), Height = HeightTextBox.Text.Trim()
         };
         _database.SaveUserEdits(_selectedDetail.Id, edits, overrides, _tags.ToList());
+        var modelIsManual = !string.Equals(ModelTextBox.Text.Trim(), _selectedDetail.ModelName?.Trim(), StringComparison.Ordinal);
+        ShowModelLabel(ModelTextBox.Text);
+        ModelSourceTextBlock.Text = $"情報源: {(modelIsManual ? "ユーザー入力" : SourceOf(null, "model_name", ReadValueSources(_selectedDetail.ValueSourcesJson)))}";
         StatusTextBlock.Text = "変更を保存しました。";
         _ = RefreshLibraryAsync();
     }
 
     private void CopyPositive_Click(object sender, RoutedEventArgs e) => CopyText(PositiveTextBox.Text, "ポジティブプロンプトをコピーしました。");
     private void CopyNegative_Click(object sender, RoutedEventArgs e) => CopyText(NegativeTextBox.Text, "ネガティブプロンプトをコピーしました。");
-    private void CopyCategory_Click(object sender, RoutedEventArgs e)
+    private void CopyPositiveCategory_Click(object sender, RoutedEventArgs e)
     {
-        var category = CopyCategoryComboBox.SelectedItem as string;
+        var category = (sender as FrameworkElement)?.Tag as string;
         if (string.IsNullOrWhiteSpace(category)) return;
-        var prompt = string.Join(", ", _tags
-            .Where(tag => tag.PromptKind == "positive" && tag.Category == category)
-            .OrderBy(tag => tag.Ordinal)
-            .Select(tag => tag.RawText));
-        CopyText(prompt, $"「{category}」のタグをコピーしました。");
+        var prompt = PositivePromptForCategory(category);
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            StatusTextBlock.Text = $"「{category}」にはコピーできるポジティブプロンプトがありません。";
+            return;
+        }
+        CopyText(prompt, $"「{category}」のポジティブプロンプトをコピーしました。");
+    }
+
+    private void EditModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (ModelTextBox.Visibility == Visibility.Visible)
+        {
+            ShowModelLabel(ModelTextBox.Text);
+            return;
+        }
+
+        ModelValueTextBlock.Visibility = Visibility.Collapsed;
+        ModelTextBox.Visibility = Visibility.Visible;
+        EditModelButton.Content = "表示に戻す";
+        ModelTextBox.Focus();
+        ModelTextBox.SelectAll();
+    }
+
+    private void TagCategory_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        Dispatcher.BeginInvoke(new Action(UpdatePositivePromptSections), DispatcherPriority.Background);
+
+    private void UpdatePositivePromptSections()
+    {
+        CharacterPromptTextBox.Text = PositivePromptForCategory("キャラクター");
+        PosePromptTextBox.Text = PositivePromptForCategory("ポーズ／行動");
+        EnvironmentPromptTextBox.Text = PositivePromptForCategory("シチュエーション／環境");
+        StylePromptTextBox.Text = PositivePromptForCategory("スタイル／品質");
+        CompositionPromptTextBox.Text = PositivePromptForCategory("構図／カメラ");
+        UncategorizedPromptTextBox.Text = PositivePromptForCategory("未分類");
+    }
+
+    private string PositivePromptForCategory(string category) => string.Join(", ", _tags
+        .Where(tag => tag.PromptKind == "positive" && tag.Category == category)
+        .OrderBy(tag => tag.Ordinal)
+        .Select(tag => tag.RawText));
+
+    private void ShowModelLabel(string? model)
+    {
+        ModelValueTextBlock.Text = string.IsNullOrWhiteSpace(model) ? "—" : model.Trim();
+        ModelValueTextBlock.Visibility = Visibility.Visible;
+        ModelTextBox.Visibility = Visibility.Collapsed;
+        EditModelButton.Content = "手動入力";
     }
 
     private void ExportWorkflow_Click(object sender, RoutedEventArgs e)
