@@ -15,15 +15,15 @@ Promptarium は、ComfyUI で生成した PNG をローカルで整理・検索�
 - プロンプト／カテゴリ単位のクリップボードコピー、workflow JSON 出力、手動バックアップ・復元
 - ローカル診断ログの表示・コピー
 
-## 必要環境
+## 利用環境
 
 - Windows 10/11
 - .NET 8 SDK
 - インターネット接続（初回の NuGet 復元時のみ）
 
-アプリは C#、.NET 8、WPF、SQLite、`Microsoft.Data.Sqlite` で構成されています。Docker、外部 AI API、外部サービス連携は使用しません。
+Docker、外部 AI API、外部サービス連携は使用しません。
 
-## 実行
+## 使い始める
 
 リポジトリのルートで実行します。
 
@@ -33,21 +33,6 @@ dotnet run --project src/Promptarium/Promptarium.csproj
 ```
 
 アプリで「フォルダを追加」を選び、画像を置いたフォルダを登録してください。登録したフォルダ以外は走査しません。通常の「全て再スキャン」は差分スキャンです。「完全再解析」は全対象を再度解析・ハッシュ化します。
-
-## ビルドとテスト
-
-clean checkoutでは、アプリと2つのtest projectを先にrestoreします。
-
-```powershell
-dotnet restore src/Promptarium/Promptarium.csproj
-dotnet restore tests/Promptarium.Tests/Promptarium.Tests.csproj
-dotnet restore tests/Promptarium.SmokeTests/Promptarium.SmokeTests.csproj
-dotnet build src/Promptarium/Promptarium.csproj --no-restore
-dotnet test tests/Promptarium.Tests/Promptarium.Tests.csproj --no-restore
-dotnet run --project tests/Promptarium.SmokeTests/Promptarium.SmokeTests.csproj --no-restore
-```
-
-xUnit テストは解析、情報源、SQLite 保存・検索、差分／完全再解析を確認します。スモークテストは最小 PNG／ComfyUI JSON フィクスチャを使い、メタデータ抽出、重複統合、編集保持、バックアップなどを通しで検証します。
 
 ## 保存先とプライバシー
 
@@ -64,16 +49,6 @@ xUnit テストは解析、情報源、SQLite 保存・検索、差分／完全�
 
 バックアップ時には保存ダイアログで別の場所も選択できます。`backups` は初期表示される既定フォルダであり、実際の保存先は選択したpathです。復元は現在のカタログを置き換える操作なので、復元前に現状のバックアップも作成してください。
 
-## Windows向け発行
-
-64-bit Windows向けの自己完結・単一ファイル版を作る例です。
-
-```powershell
-dotnet publish src/Promptarium/Promptarium.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
-```
-
-出力先は `src/Promptarium/bin/Release/net8.0-windows/win-x64/publish/` です。配布前に、そのフォルダの `Promptarium.exe` を配布対象Windowsで起動確認してください。
-
 ## 対応範囲と制約
 
 - PNG と ComfyUI メタデータが対象です。JPEG、WebP、AVIF、Stable Diffusion WebUI、Forge は対象外です。
@@ -81,16 +56,3 @@ dotnet publish src/Promptarium/Promptarium.csproj -c Release -r win-x64 --self-c
 - カスタムノードは画像登録を止めず、未知ノードとして明示表示します。
 - 常時フォルダ監視、複数 PC 同期、類似画像検索、AI 分類は実装していません。
 - 実ComfyUI PNGを用いたカスタムノード検証と10,000件規模の定量性能測定は今後の課題です。
-
-実装状況と既知の制約は [docs/implementation-status.md](docs/implementation-status.md)、要件の正本は [docs/requirements.md](docs/requirements.md) を参照してください。
-
-## 構成
-
-```text
-src/Promptarium/              WPF アプリ
-  Services/                   PNG抽出、ComfyUI解析、SQLite、スキャン、診断
-  Models/                     ドメインモデル
-tests/Promptarium.Tests/      xUnit 回帰テスト
-tests/Promptarium.SmokeTests/ 実行可能なスモークテストとフィクスチャ
-docs/                         要件、計画、進捗台帳
-```
