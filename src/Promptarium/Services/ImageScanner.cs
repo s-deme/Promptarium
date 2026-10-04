@@ -78,9 +78,10 @@ public sealed class ImageScanner
                     ParsedGeneration generation;
                     try
                     {
-                        metadata = await Task.Run(() => _metadataReader.Read(path), cancellationToken).ConfigureAwait(false);
+                        metadata = await Task.Run(() => _metadataReader.Read(path, cancellationToken), cancellationToken).ConfigureAwait(false);
                         generation = _workflowParser.Parse(metadata);
                     }
+                    catch (OperationCanceledException) { throw; }
                     catch (Exception exception)
                     {
                         metadata = new PngMetadata { IsPng = true };
