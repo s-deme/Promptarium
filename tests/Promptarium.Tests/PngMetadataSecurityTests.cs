@@ -74,8 +74,21 @@ public sealed class PngMetadataSecurityTests : IDisposable
         var data = compressed.ToArray();
         Write(("zTXt", data), ("zTXt", data), ("zTXt", data));
         using var cancellation = new CancellationTokenSource();
-        var reading = Task.Run(() => new PngMetadataReader().Read(path, cancellation.Token));
         var observedOpenRead = false;
+        var reading = Task.Run(() =>
+        {
+            while (true)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                try { return new PngMetadataReader().Read(path, cancellation.Token); }
+                // The exclusive observation probe can briefly race with opening the file.
+                // Retry only Windows sharing violations before an active read is observed.
+                catch (IOException exception) when (exception.HResult == unchecked((int)0x80070020) && !observedOpenRead)
+                {
+                    Thread.Yield();
+                }
+            }
+        });
         Assert.True(SpinWait.SpinUntil(() =>
         {
             if (reading.IsCompleted) return true;
