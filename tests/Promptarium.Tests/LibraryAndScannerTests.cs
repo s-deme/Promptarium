@@ -80,6 +80,32 @@ public sealed class LibraryAndScannerTests : IDisposable
         Assert.Equal(0, forced.Skipped);
     }
 
+    [Fact]
+    public async Task Scanner_records_limit_reason_and_continues_with_other_images()
+    {
+        var directory = Path.Combine(_testRoot, "bounded-scan");
+        Directory.CreateDirectory(directory);
+        var invalid = Path.Combine(directory, "oversized.png");
+        using (var stream = File.Create(invalid))
+        {
+            stream.Write([137, 80, 78, 71, 13, 10, 26, 10]);
+            // A text chunk one byte over 8 MiB, followed by its CRC and IEND.
+            stream.Write([0, 128, 0, 1, (byte)'t', (byte)'E', (byte)'X', (byte)'t']);
+            stream.Write(new byte[8 * 1024 * 1024 + 1]);
+            stream.Write(new byte[4]);
+            stream.Write([0, 0, 0, 0, (byte)'I', (byte)'E', (byte)'N', (byte)'D', 0, 0, 0, 0]);
+        }
+        File.WriteAllBytes(Path.Combine(directory, "normal.png"), Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlK4V8AAAAASUVORK5CYII="));
+        var database = CreateDatabase(); database.UpsertScanRoot(directory);
+        var scanner = new ImageScanner(database, new PngMetadataReader(), new ComfyWorkflowParser(), new PromptClassifier());
+        var result = await scanner.ScanAllAsync();
+        Assert.Equal(2, result.Registered);
+        var failures = database.Search(new LibrarySearch { ParseStatus = ParseStatus.Failed }, 10, 0);
+        var failed = Assert.Single(failures);
+        Assert.Contains("exceeds the limit", database.GetDetail(failed.Id)!.ParseMessage);
+        Assert.Equal(1, database.CountSearchResults(new LibrarySearch { ParseStatus = ParseStatus.NoMetadata }));
+    }
+
     public void Dispose()
     {
         if (!Directory.Exists(_testRoot)) return;

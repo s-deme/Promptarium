@@ -40,6 +40,19 @@ public sealed class PngMetadataSecurityTests : IDisposable
         Assert.Throws<InvalidDataException>(() => new PngMetadataReader().Read(path));
     }
 
+    [Theory]
+    [InlineData("zTXt")]
+    [InlineData("iTXt")]
+    public void AcceptsCompressedOutputAtLimit(string type)
+    {
+        using var compressed = new MemoryStream();
+        compressed.Write(type == "zTXt" ? [(byte)'k', 0, 0] : [(byte)'k', 0, 1, 0, 0, 0]);
+        using (var zlib = new ZLibStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+            zlib.Write(new byte[Limit]);
+        Write((type, compressed.ToArray()));
+        Assert.Equal(Limit, new PngMetadataReader().Read(path).Text["k"].Length);
+    }
+
     [Fact]
     public void RejectsCumulativeLimitAndCancellation()
     {
