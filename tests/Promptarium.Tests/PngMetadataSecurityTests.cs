@@ -65,6 +65,38 @@ public sealed class PngMetadataSecurityTests : IDisposable
     }
 
     [Fact]
+    public async Task CancelsAnActiveReadAndReleasesTheFile()
+    {
+        using var compressed = new MemoryStream();
+        compressed.Write([(byte)'k', 0, 0]);
+        using (var zlib = new ZLibStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+            zlib.Write(new byte[Limit]);
+        var data = compressed.ToArray();
+        Write(("zTXt", data), ("zTXt", data), ("zTXt", data));
+        using var cancellation = new CancellationTokenSource();
+        var reading = Task.Run(() => new PngMetadataReader().Read(path, cancellation.Token));
+        var observedOpenRead = false;
+        Assert.True(SpinWait.SpinUntil(() =>
+        {
+            if (reading.IsCompleted) return true;
+            try
+            {
+                using var exclusive = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+                return false;
+            }
+            catch (IOException)
+            {
+                observedOpenRead = true;
+                cancellation.Cancel();
+                return true;
+            }
+        }, TimeSpan.FromSeconds(5)));
+        Assert.True(observedOpenRead, "The reader must have opened the file before cancellation.");
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await reading);
+        using var reopened = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+    }
+
+    [Fact]
     public void RejectsTruncatedChunkLength()
     {
         Write(("tEXt", Encoding.ASCII.GetBytes("k\0v")));
